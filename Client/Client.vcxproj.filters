@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Core">
+      <UniqueIdentifier>{6a1c2b10-3f7e-4d55-9a61-0c1e5b7d2a01}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game">
+      <UniqueIdentifier>{6a1c2b10-3f7e-4d55-9a61-0c1e5b7d2a02}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Scene">
+      <UniqueIdentifier>{6a1c2b10-3f7e-4d55-9a61-0c1e5b7d2a03}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="Framework.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Collision.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Sound.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Effect.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Weapon.cpp"><Filter>Game</Filter></ClCompile>
+    <ClCompile Include="Player.cpp"><Filter>Game</Filter></ClCompile>
+    <ClCompile Include="Enemy.cpp"><Filter>Game</Filter></ClCompile>
+    <ClCompile Include="Boss.cpp"><Filter>Game</Filter></ClCompile>
+    <ClCompile Include="Map.cpp"><Filter>Game</Filter></ClCompile>
+    <ClCompile Include="UI.cpp"><Filter>Scene</Filter></ClCompile>
+    <ClCompile Include="Scenes.cpp"><Filter>Scene</Filter></ClCompile>
+    <ClCompile Include="PlayState.cpp"><Filter>Scene</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Common.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Vector2D.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Framework.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Collision.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Sound.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Effect.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Weapon.h"><Filter>Game</Filter></ClInclude>
+    <ClInclude Include="Player.h"><Filter>Game</Filter></ClInclude>
+    <ClInclude Include="Enemy.h"><Filter>Game</Filter></ClInclude>
+    <ClInclude Include="Boss.h"><Filter>Game</Filter></ClInclude>
+    <ClInclude Include="Map.h"><Filter>Game</Filter></ClInclude>
+    <ClInclude Include="UI.h"><Filter>Scene</Filter></ClInclude>
+    <ClInclude Include="Scenes.h"><Filter>Scene</Filter></ClInclude>
+    <ClInclude Include="PlayState.h"><Filter>Scene</Filter></ClInclude>
+  </ItemGroup>
+</Project>
