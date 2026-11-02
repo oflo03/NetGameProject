@@ -78,6 +78,7 @@
   <ItemGroup>
     <ClInclude Include="..\Common\Protocol.h" />
     <ClInclude Include="..\Common\Vector2D.h" />
+    <ClInclude Include="..\Common\CollisionCheck.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

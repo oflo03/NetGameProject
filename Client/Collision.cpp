@@ -25,26 +25,24 @@ void Collider::detection()
 		if (!collisionable[this->layer][other->layer]) continue;
 		if (this->shape == rect) {
 			if (other->shape == rect) {
-				if (this->pos - other->pos <= this->size + other->size) {
+				if (CollisionCheck::RectRect(this->pos, this->size, other->pos, other->size)) {
 					collisionMsg.emplace(CollisionMessage(this->owner, other->layer, other->damage));
 				}
 			}
 			else if (other->shape == circle) {
-				if (((this->pos - other->pos <= this->size + other->size) ||
-					((this->pos - other->pos) > this->size) && ((this->pos - other->pos).Vabs() - this->size.Vabs()).GetLenth() < other->size.x)) {
+				if (CollisionCheck::RectCircle(this->pos, this->size, other->pos, other->size)) {
 					collisionMsg.emplace(CollisionMessage(this->owner, other->layer, other->damage));
 				}
 			}
 		}
 		else if (this->shape == circle) {
 			if (other->shape == rect) {
-				if (((this->pos - other->pos <= this->size + other->size) ||
-					((this->pos - other->pos) > other->size) && ((this->pos - other->pos).Vabs() - other->size.Vabs()).GetLenth() < this->size.x)) {
+				if (CollisionCheck::CircleRect(this->pos, this->size, other->pos, other->size)) {
 					collisionMsg.emplace(CollisionMessage(this->owner, other->layer, other->damage));
 				}
 			}
 			else if (other->shape == circle) {
-				if ((this->pos - other->pos).GetLenth() <= this->size.x + other->size.x) {
+				if (CollisionCheck::CircleCircle(this->pos, this->size, other->pos, other->size)) {
 					collisionMsg.emplace(CollisionMessage(this->owner, other->layer, other->damage));
 				}
 			}
@@ -106,7 +104,7 @@ bool isWallCollision(Vector2D<float> pos, Vector2D<float> size)
 {
 	for (auto& other : COLL) {
 		if (other->layer != wall && other->layer != water) continue;
-		if (pos - other->pos <= size + other->size)
+		if (CollisionCheck::RectRect(pos, size, other->pos, other->size))
 			return true;
 	}
 	return false;

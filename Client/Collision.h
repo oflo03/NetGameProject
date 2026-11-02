@@ -2,6 +2,7 @@
 #include <queue>
 #include <unordered_set>
 #include "Common.h"
+#include "CollisionCheck.h"
 
 enum shapetype
 {

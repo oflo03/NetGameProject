@@ -93,6 +93,7 @@
     <ClInclude Include="..\Common\Vector2D.h" />
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Collision.h" />
+    <ClInclude Include="..\Common\CollisionCheck.h" />
     <ClInclude Include="Sound.h" />
     <ClInclude Include="Effect.h" />
     <ClInclude Include="Weapon.h" />

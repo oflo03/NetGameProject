@@ -31,6 +31,7 @@
     <ClInclude Include="..\Common\Vector2D.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Framework.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Collision.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="..\Common\CollisionCheck.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Sound.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Effect.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Weapon.h"><Filter>Game</Filter></ClInclude>
