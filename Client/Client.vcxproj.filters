@@ -28,7 +28,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Common.h"><Filter>Core</Filter></ClInclude>
-    <ClInclude Include="Vector2D.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="..\Common\Vector2D.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Framework.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Collision.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Sound.h"><Filter>Core</Filter></ClInclude>

@@ -90,7 +90,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Common.h" />
-    <ClInclude Include="Vector2D.h" />
+    <ClInclude Include="..\Common\Vector2D.h" />
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Collision.h" />
     <ClInclude Include="Sound.h" />
