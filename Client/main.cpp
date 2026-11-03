@@ -50,6 +50,21 @@ double GetFrameTime()
 	return frameTime;
 }
 
+void GameTick(HWND hWnd)
+{
+	// [C4] NetworkManager::RecvAll
+	// [C4] NetworkManager::ProcessPackets
+
+	GetCursorPos(&mPoint);
+	frame_time = GetFrameTime();
+	stateStack.back()->handle_events();
+	stateStack.back()->update();
+
+	// [C8] NetworkManager::FlushSend
+
+	InvalidateRect(hWnd, NULL, false);
+}
+
 HINSTANCE g_hinst;
 LPCTSTR IpszClass = L"Window Class Name";
 LPCTSTR IpszWindowName = L"Drop The Gun";
@@ -108,6 +123,7 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	switch (iMessage)
 	{
 	case WM_CREATE:
+		// [C1] NetworkManager::Init
 		GetClientRect(hWnd, &screen);
 		start_game(new LogoState());
 		SetTimer(hWnd, 1, 10, NULL);
@@ -129,15 +145,12 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	}
 	case WM_TIMER:
 		if (wParam == 1) {
-			GetCursorPos(&mPoint);
-			frame_time = GetFrameTime();
-			stateStack.back()->handle_events();
-			stateStack.back()->update();
-			InvalidateRect(hWnd, NULL, false);
+			GameTick(hWnd);
 		}
 		break;
 	case WM_DESTROY:
 		end_game();
+		// [C11] NetworkManager::Cleanup
 		PostQuitMessage(0);
 		break;
 	default:
