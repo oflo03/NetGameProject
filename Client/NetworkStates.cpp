@@ -63,3 +63,67 @@ void LoginState::draw()
 {
 	// [C2] draw: 로그인 화면 그리기
 }
+
+// ---- LobbyState ----
+
+LobbyState::LobbyState()
+{
+	// [C3] LobbyState: 대기실 화면 초기화
+}
+
+void LobbyState::SendSelectChar(uint8_t charType)
+{
+	// [C3] SendSelectChar: 캐릭터 선택 요청 전송
+}
+
+void LobbyState::SendReady(bool ready)
+{
+	// [C3] SendReady: 레디 상태 변경 요청 전송
+}
+
+void LobbyState::SendStart()
+{
+	// [C3] SendStart: 방장의 게임 시작 요청 전송
+}
+
+void LobbyState::process_packet(const PacketHeader* packet)
+{
+	// [C3] process_packet: 대기실 정보 갱신, 게임 시작 시 화면 전환
+}
+
+void LobbyState::update()
+{
+	// [C3] update: 대기실 화면 갱신
+}
+
+void LobbyState::handle_events()
+{
+	// [C3] handle_events: 캐릭터·레디·시작 버튼 처리
+}
+
+void LobbyState::draw()
+{
+	// [C3] draw: 멤버 목록과 버튼 그리기
+}
+
+// ---- ResultState ----
+
+ResultState::ResultState()
+{
+	// [C10] ResultState: 결과 화면 초기화
+}
+
+void ResultState::update()
+{
+	// [C10] update: 결과 화면 갱신
+}
+
+void ResultState::handle_events()
+{
+	// [C10] handle_events: 확인 시 대기실로 복귀
+}
+
+void ResultState::draw()
+{
+	// [C10] draw: 클리어 / 게임오버 결과 표시
+}

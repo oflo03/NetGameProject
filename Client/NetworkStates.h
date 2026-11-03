@@ -33,3 +33,29 @@ public:
 	void handle_events() override;
 	void draw() override;
 };
+
+class LobbyState : public GameState
+{
+private:
+	S2C_ROOM_INFO_PACKET roomInfo = {};
+public:
+	LobbyState();
+	void SendSelectChar(uint8_t charType);
+	void SendReady(bool ready);
+	void SendStart();
+	void process_packet(const PacketHeader* packet) override;
+	void update() override;
+	void handle_events() override;
+	void draw() override;
+};
+
+class ResultState : public GameState
+{
+private:
+	GameResult result = RESULT_WIPE;
+public:
+	ResultState();
+	void update() override;
+	void handle_events() override;
+	void draw() override;
+};
