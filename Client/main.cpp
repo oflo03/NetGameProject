@@ -143,6 +143,10 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		EndPaint(hWnd, &ps);
 		break;
 	}
+	case WM_CHAR:
+		// [C1·C2] on_char: 문자 입력을 현재 화면에 전달
+		// stateStack.back()->on_char(static_cast<wchar_t>(wParam));
+		break;
 	case WM_TIMER:
 		if (wParam == 1) {
 			GameTick(hWnd);

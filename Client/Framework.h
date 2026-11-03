@@ -9,6 +9,7 @@ public:
 	virtual ~GameState() = default;
 	virtual void update() = 0;
 	virtual void handle_events() = 0;
+	virtual void on_char(wchar_t ch) {}
 	virtual void draw() = 0;
 	virtual void process_packet(const PacketHeader* packet);
 };

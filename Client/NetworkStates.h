@@ -13,7 +13,7 @@ private:
 	std::wstring message;
 public:
 	ConnectState();
-	void on_char(wchar_t ch);
+	void on_char(wchar_t ch) override;
 	void update() override;
 	void handle_events() override;
 	void draw() override;
@@ -26,7 +26,7 @@ private:
 	std::wstring message;
 public:
 	LoginState();
-	void on_char(wchar_t ch);
+	void on_char(wchar_t ch) override;
 	void SendLogin();
 	void process_packet(const PacketHeader* packet) override;
 	void update() override;

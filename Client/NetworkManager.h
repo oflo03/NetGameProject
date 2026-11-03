@@ -13,8 +13,9 @@ public:
 
 private:
 	static NetworkManager* instance;
-	SOCKET socket = INVALID_SOCKET;
-	char recvBuffer[MAX_PACKET_SIZE] = {};
+	static constexpr int RECV_BUFFER_SIZE = MAX_PACKET_SIZE * 16;	// 여러 패킷 누적 수신 (65536바이트)
+	SOCKET sock = INVALID_SOCKET;
+	char recvBuffer[RECV_BUFFER_SIZE] = {};
 	int recvLength = 0;
 	std::vector<char> sendBuffer;
 	ConnectionState connectionState = ConnectionState::CS_DISCONNECTED;
