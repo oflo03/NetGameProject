@@ -98,6 +98,7 @@
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Collision.h" />
     <ClInclude Include="..\Common\CollisionCheck.h" />
+    <ClInclude Include="..\Common\GameData.h" />
     <ClInclude Include="Sound.h" />
     <ClInclude Include="Effect.h" />
     <ClInclude Include="Weapon.h" />
