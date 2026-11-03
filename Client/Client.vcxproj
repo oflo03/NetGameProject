@@ -77,6 +77,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Framework.cpp" />
     <ClCompile Include="NetworkManager.cpp" />
+    <ClCompile Include="NetworkStates.cpp" />
     <ClCompile Include="Collision.cpp" />
     <ClCompile Include="Sound.cpp" />
     <ClCompile Include="Effect.cpp" />
@@ -92,6 +93,7 @@
   <ItemGroup>
     <ClInclude Include="Common.h" />
     <ClInclude Include="NetworkManager.h" />
+    <ClInclude Include="NetworkStates.h" />
     <ClInclude Include="Vector2D.h" />
     <ClInclude Include="Framework.h" />
     <ClInclude Include="Collision.h" />

@@ -2,6 +2,11 @@
 
 std::vector<GameState*> stateStack;
 
+void GameState::process_packet(const PacketHeader* packet)
+{
+	// [C4] process_packet: 현재 화면에서 받은 패킷 처리
+}
+
 void change_state(GameState* state)
 {
 	if (!stateStack.empty()) {

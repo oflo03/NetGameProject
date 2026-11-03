@@ -15,6 +15,7 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="Framework.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="NetworkManager.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="NetworkStates.cpp"><Filter>Scene</Filter></ClCompile>
     <ClCompile Include="Collision.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Sound.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Effect.cpp"><Filter>Core</Filter></ClCompile>
@@ -30,6 +31,7 @@
   <ItemGroup>
     <ClInclude Include="Common.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="NetworkManager.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="NetworkStates.h"><Filter>Scene</Filter></ClInclude>
     <ClInclude Include="Vector2D.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Framework.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Collision.h"><Filter>Core</Filter></ClInclude>
