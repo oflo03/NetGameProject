@@ -1,5 +1,5 @@
 #include "Scenes.h"
-#include "PlayState.h"
+#include "LocalPlayState.h"
 #include "Player.h"
 #include "Boss.h"
 #include "Map.h"
@@ -185,12 +185,12 @@ void SelectState::handle_events()
 		if (PtInRect(&BT1, mPoint)) {
 			selectedPlayer = marin;
 			SoundManager::getInstance()->play(BUTTONCLICK);
-			change_state(new PlayState());
+			change_state(new LocalPlayState());
 		}
 		else if (PtInRect(&BT2, mPoint)) {
 			selectedPlayer = knight;
 			SoundManager::getInstance()->play(BUTTONCLICK);
-			change_state(new PlayState());
+			change_state(new LocalPlayState());
 		}
 	}
 }

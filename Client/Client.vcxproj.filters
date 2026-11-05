@@ -27,6 +27,7 @@
     <ClCompile Include="UI.cpp"><Filter>Scene</Filter></ClCompile>
     <ClCompile Include="Scenes.cpp"><Filter>Scene</Filter></ClCompile>
     <ClCompile Include="PlayState.cpp"><Filter>Scene</Filter></ClCompile>
+    <ClCompile Include="LocalPlayState.cpp"><Filter>Scene</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Common.h"><Filter>Core</Filter></ClInclude>
@@ -47,5 +48,6 @@
     <ClInclude Include="UI.h"><Filter>Scene</Filter></ClInclude>
     <ClInclude Include="Scenes.h"><Filter>Scene</Filter></ClInclude>
     <ClInclude Include="PlayState.h"><Filter>Scene</Filter></ClInclude>
+    <ClInclude Include="LocalPlayState.h"><Filter>Scene</Filter></ClInclude>
   </ItemGroup>
 </Project>
