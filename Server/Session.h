@@ -7,7 +7,19 @@
 
 constexpr int MAX_SESSIONS = 8;	// 로그인 전 접속 포함. 로그인은 MAX_PLAYERS명까지
 
-// 접속 하나. 소켓과 수신 버퍼는 자기 클라이언트 스레드만 쓰고, 나머지는 room.lock을 잡고 쓴다
+// 락 순서: room.lock → sendLock / inputLock (반대로 잡지 않는다)
+
+// 게임 로직 스레드가 TakeInput으로 꺼내 가는 입력
+struct InputState
+{
+	uint8_t keys = 0;			// InputKey 비트
+	int8_t weapon = -1;			// 1~5키로 고른 무기 ID, 없으면 -1
+	float aimX = 0, aimY = 0;	// 조준 좌표 (월드)
+	bool interact = false;		// C2S_INTERACT를 받았으면 true
+};
+
+// 접속 하나. 소켓과 수신 버퍼는 자기 클라이언트 스레드만 쓰고,
+// 송신 큐와 입력 버퍼는 각자의 lock, 나머지는 room.lock을 잡고 쓴다
 struct Session
 {
 	bool used = false;					// 슬롯 사용 중
@@ -19,6 +31,14 @@ struct Session
 	bool ready = false;
 	char recvBuffer[MAX_PACKET_SIZE * 4] = {};	// 덜 받은 패킷 + 새로 받은 데이터
 	int recvLength = 0;
+
+	// 송신 큐. 여러 스레드가 EnqueueSend로 넣고 자기 클라이언트 스레드가 FlushSend로 보낸다
+	std::mutex sendLock;
+	std::vector<char> sendQueue;
+
+	// 입력 버퍼. 클라이언트 스레드가 HandleInput으로 쓰고 게임 로직 스레드가 TakeInput으로 꺼낸다
+	std::mutex inputLock;
+	InputState input;
 };
 
 enum RoomState : uint8_t
