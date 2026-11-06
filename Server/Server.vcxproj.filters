@@ -2,6 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ClientThread.cpp" />
     <ClCompile Include="TileMap.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -9,6 +10,7 @@
     <ClInclude Include="..\Common\Vector2D.h" />
     <ClInclude Include="..\Common\CollisionCheck.h" />
     <ClInclude Include="..\Common\GameData.h" />
+    <ClInclude Include="ClientThread.h" />
     <ClInclude Include="Session.h" />
     <ClInclude Include="TileMap.h" />
   </ItemGroup>
