@@ -2,8 +2,8 @@
 #include "Common.h"
 #include "Framework.h"
 
-// PlayState 외의 화면들 (로고, 메뉴, 캐릭터 선택, 옵션, 게임오버, 엔딩, 보스 컷신)
-// 흐름: Logo -> Menu -> Select -> PlayState -> (BossScene / BossDieScene) -> Ending / GameOver
+// LocalPlayState 외의 화면들 (로고, 메뉴, 캐릭터 선택, 옵션, 게임오버, 엔딩, 보스 컷신)
+// 흐름: Logo -> Menu -> Select -> LocalPlayState -> (BossScene / BossDieScene) -> Ending / GameOver
 
 class Boss;
 class Player;
