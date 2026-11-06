@@ -76,6 +76,8 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ClientThread.cpp" />
     <ClCompile Include="TileMap.cpp" />
+    <ClCompile Include="World.cpp" />
+    <ClCompile Include="LogicThread.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Common\Protocol.h" />
@@ -85,6 +87,8 @@
     <ClInclude Include="ClientThread.h" />
     <ClInclude Include="Session.h" />
     <ClInclude Include="TileMap.h" />
+    <ClInclude Include="World.h" />
+    <ClInclude Include="LogicThread.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
