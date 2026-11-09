@@ -1,5 +1,60 @@
 #include "ClientThread.h"
 
+// ---- S3 로그인 처리 ----
+
+void HandleLogin(Session* s, const C2S_LOGIN_PACKET* packet)
+{
+	// [S3] HandleLogin: 이미 로그인한 세션이면 무시, name 끝을 널 문자로 막음
+	// room.lock을 잡고 게임 중 → 인원 → 닉네임 중복 순서로 확인, 통과하면 빈 playerId 발급 (첫 로그인이면 방장)
+	// 락을 푼 뒤 SendLoginResult, 성공이면 BroadcastRoomInfo
+}
+
+bool IsNameTaken(const wchar_t* name)
+{
+	// [S3] IsNameTaken: 로그인한 세션 중 같은 닉네임이 있는지 확인
+	return false;
+}
+
+int CountLoggedIn()
+{
+	// [S3] CountLoggedIn: 로그인한 세션 수 (playerId >= 0)
+	return 0;
+}
+
+void SendLoginResult(Session* s, uint8_t result, uint8_t playerId)
+{
+	// [S3] SendLoginResult: S2C_LOGIN_RESULT를 EnqueueSend
+}
+
+// ---- S4 대기실 처리 ----
+
+void HandleSelectChar(Session* s, const C2S_SELECT_CHAR_PACKET* packet)
+{
+	// [S4] HandleSelectChar: room.lock을 잡고 로그인 전이거나 게임 중이거나 charType이 marin·knight가 아니면 무시, charType 갱신
+	// 락을 푼 뒤 BroadcastRoomInfo
+}
+
+void HandleReady(Session* s, const C2S_READY_PACKET* packet)
+{
+	// [S4] HandleReady: room.lock을 잡고 로그인 전이거나 게임 중이면 무시, ready 갱신
+	// 락을 푼 뒤 BroadcastRoomInfo
+}
+
+void HandleStart(Session* s)
+{
+	// [S4] HandleStart: room.lock을 잡고 방장인지, 로그인한 사람 전원이 레디인지 확인, 맞으면 startRequested = true
+}
+
+void BroadcastRoomInfo()
+{
+	// [S4] BroadcastRoomInfo: room.lock을 잡고 S2C_ROOM_INFO 작성, 락을 푼 뒤 Broadcast
+}
+
+void PassHost()
+{
+	// [S4] PassHost: 남은 로그인 세션 중 가장 작은 playerId를 hostId로, 없으면 -1
+}
+
 // ---- S5 패킷 수신 ----
 
 void ClientThreadMain(Session* s)
@@ -26,7 +81,31 @@ void ProcessPackets(Session* s)
 
 void DispatchPacket(Session* s, const PacketHeader* packet)
 {
-	// [S5] DispatchPacket: packet->type별 처리 함수 호출 (S3 로그인, S4 대기실, S6 입력)
+	// [S5] DispatchPacket: packet->size가 종류별 구조체 크기와 같은지 확인, 다르면 connected = false
+	switch (packet->type)
+	{
+	case C2S_LOGIN:
+		HandleLogin(s, static_cast<const C2S_LOGIN_PACKET*>(packet));
+		break;
+	case C2S_SELECT_CHAR:
+		HandleSelectChar(s, static_cast<const C2S_SELECT_CHAR_PACKET*>(packet));
+		break;
+	case C2S_READY:
+		HandleReady(s, static_cast<const C2S_READY_PACKET*>(packet));
+		break;
+	case C2S_START:
+		HandleStart(s);
+		break;
+	case C2S_INPUT:
+		HandleInput(s, static_cast<const C2S_INPUT_PACKET*>(packet));
+		break;
+	case C2S_INTERACT:
+		HandleInteract(s);
+		break;
+	default:
+		// [S5] 모르는 패킷 종류면 connected = false
+		break;
+	}
 }
 
 // ---- S6 입력 처리 ----
