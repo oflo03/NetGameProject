@@ -34,4 +34,7 @@ public:
 	void ResolveCollisions();
 	void SwordSlash(ServerPlayer& player);
 	void DamagePlayer(ServerPlayer& player, int damage);
+	void UpdateEnemies(float deltaTime);
+	ServerPlayer* FindNearestPlayer(const Vector2D<float>& pos) const;
+	void DamageEnemy(ServerEnemy& enemy, int damage);
 };

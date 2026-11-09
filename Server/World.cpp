@@ -1,6 +1,7 @@
 #include "World.h"
 #include "Bullet.h"
 #include "ServerPlayer.h"
+#include "ServerEnemy.h"
 
 void World::Tick(float deltaTime)
 {
@@ -36,4 +37,20 @@ void World::SwordSlash(ServerPlayer& player)
 void World::DamagePlayer(ServerPlayer& player, int damage)
 {
 	// [S10] World::DamagePlayer: 플레이어 피격, 사망 처리
+}
+
+void World::UpdateEnemies(float deltaTime)
+{
+	// [S11] World::UpdateEnemies: 적 타깃 선택, Behavior Tree 실행, 이동
+}
+
+ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
+{
+	// [S11] World::FindNearestPlayer: 가장 가까운 생존 플레이어 찾기
+	return nullptr;
+}
+
+void World::DamageEnemy(ServerEnemy& enemy, int damage)
+{
+	// [S11] World::DamageEnemy: 적 피격, 사망, 드랍 생성
 }

@@ -7,6 +7,8 @@
     <ClCompile Include="World.cpp" />
     <ClCompile Include="LogicThread.cpp" />
     <ClCompile Include="ServerPlayer.cpp" />
+    <ClCompile Include="ServerEnemy.cpp" />
+    <ClCompile Include="BehaviorTree.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Common\Protocol.h" />
@@ -20,5 +22,7 @@
     <ClInclude Include="LogicThread.h" />
     <ClInclude Include="ServerPlayer.h" />
     <ClInclude Include="Bullet.h" />
+    <ClInclude Include="ServerEnemy.h" />
+    <ClInclude Include="BehaviorTree.h" />
   </ItemGroup>
 </Project>
