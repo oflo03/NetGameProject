@@ -65,7 +65,7 @@ void ClientThreadMain(Session* s)
 		RecvAll(s);
 		ProcessPackets(s);
 	}
-	// [S8] OnDisconnect: 세션 정리, 남은 클라이언트에 알림
+	OnDisconnect(s);
 }
 
 void RecvAll(Session* s)
@@ -141,4 +141,17 @@ void Broadcast(const void* packet, int size)
 void FlushSend(Session* s)
 {
 	// [S7] FlushSend: sendLock을 잡고 sendQueue를 send, 보낸 만큼 앞에서 지움 (WSAEWOULDBLOCK이면 다음 루프에), 오류면 connected = false
+}
+
+// ---- S8 접속 종료 처리 ----
+
+void OnDisconnect(Session* s)
+{
+	// [S8] OnDisconnect: room.lock을 잡고 로그인한 세션이면 게임 중 이탈 기록(leftPlayers), playerId = -1, 방장이었으면 PassHost
+	// 락을 푼 뒤 남은 클라이언트에 알림 (게임 중 S2C_PLAYER_LEFT, 대기실 BroadcastRoomInfo), 마지막에 ReleaseSession
+}
+
+void ReleaseSession(Session* s)
+{
+	// [S8] ReleaseSession: closesocket, room.lock을 잡고 슬롯을 필드별로 초기화 (sendQueue, input, recvLength 포함), 마지막에 used = false
 }

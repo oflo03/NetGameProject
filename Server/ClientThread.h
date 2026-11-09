@@ -31,3 +31,7 @@ InputState TakeInput(int playerId);
 void EnqueueSend(Session* s, const void* packet, int size);
 void Broadcast(const void* packet, int size);	// room.lock을 직접 잡으므로 room.lock을 잡은 채로 부르지 않는다
 void FlushSend(Session* s);
+
+// [S8] 접속 종료 처리. 자기 클라이언트 스레드가 루프를 나온 뒤 부른다
+void OnDisconnect(Session* s);
+void ReleaseSession(Session* s);
