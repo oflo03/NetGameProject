@@ -28,4 +28,13 @@ private:
 
 public:
 	void Tick(float deltaTime);	// 경과 시간은 초 단위
+	void UpdatePlayers(float deltaTime);
+	Bullet* SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir);
+	void UpdateBullets(float deltaTime);
+	void ResolveCollisions();
+	void SwordSlash(ServerPlayer& player);
+	void DamagePlayer(ServerPlayer& player, int damage);
+	void UpdateEnemies(float deltaTime);
+	ServerPlayer* FindNearestPlayer(const Vector2D<float>& pos) const;
+	void DamageEnemy(ServerEnemy& enemy, int damage);
 };
