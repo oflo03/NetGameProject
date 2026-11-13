@@ -22,3 +22,9 @@ std::unique_ptr<World> StartGame()
 	// [S9] StartGame: 월드 생성, 게임 시작 패킷 전송, 스테이지 1 로드
 	return nullptr;
 }
+
+void EndGame(GameResult result)
+{
+	// [S12] EndGame: S2C_GAME_END 전송, room.lock으로 대기실 상태·레디 정리, 대기실 정보 전파
+	// Broadcast와 BroadcastRoomInfo는 room.lock을 푼 뒤 호출한다
+}
