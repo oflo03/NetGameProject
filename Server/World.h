@@ -1,9 +1,11 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <vector>
 #include "Protocol.h"
 #include "TileMap.h"
+#include "ServerPlayer.h"
 
 class ServerPlayer;
 class ServerEnemy;
@@ -15,12 +17,11 @@ struct ServerDrop;
 class World
 {
 private:
-	// 엔티티 정의와 생성·해제는 후속 일정에서 추가
-	std::array<ServerPlayer*, MAX_PLAYERS> players{};	// 인덱스는 playerId
-	std::vector<ServerEnemy*> enemies;
-	std::vector<Bullet*> bullets;
+	std::array<ServerPlayer, MAX_PLAYERS> players{};	// 인덱스는 playerId
+	std::vector<std::unique_ptr<ServerEnemy>> enemies;
+	std::vector<std::unique_ptr<Bullet>> bullets;
 	std::vector<ServerDrop*> drops;
-	ServerBoss* boss = nullptr;
+	std::unique_ptr<ServerBoss> boss;
 	TileMap map;
 	int stage = 0;
 	int phase = 0;
@@ -30,6 +31,9 @@ private:
 	std::vector<std::vector<char>> events;	// 이번 틱의 Protocol.h 이벤트 패킷 바이트
 
 public:
+	World();
+	~World();
+	bool Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap);
 	void Tick(float deltaTime);	// 경과 시간은 초 단위
 	void UpdatePlayers(float deltaTime);
 	Bullet* SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir);

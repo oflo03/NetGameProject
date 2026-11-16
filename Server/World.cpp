@@ -1,12 +1,98 @@
+#define NOMINMAX
 #include "World.h"
 #include "Bullet.h"
 #include "ServerPlayer.h"
 #include "ServerEnemy.h"
 #include "ServerBoss.h"
+#include "ClientThread.h"
+#include "GameData.h"
+#include "CollisionCheck.h"
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+
+namespace
+{
+	bool IsPlayerBlocked(const TileMap& map, Vector2D<float> pos, Vector2D<float> size)
+	{
+		if (pos.x - size.x < 0 || pos.y - size.y < 0 ||
+			pos.x + size.x > TileMap::Columns * TileMap::TileExtent ||
+			pos.y + size.y > TileMap::Rows * TileMap::TileExtent)
+			return true;
+		for (const auto& tile : map.blockedTiles)
+			if (CollisionCheck::RectRect(pos, size, tile.pos, tile.size))
+				return true;
+		return false;
+	}
+}
+
+World::World() = default;
+World::~World() = default;
+
+bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
+{
+	// [S9] 시작 정보와 맵을 모두 확인한 뒤 월드를 교체한다.
+	std::array<ServerPlayer, MAX_PLAYERS> loadedPlayers{};
+	int playerCount = 0;
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		const auto& info = start.players[id];
+		if (!info.used)
+			continue;
+		if (info.charType > CHAR_KNIGHT || !std::isfinite(info.x) || !std::isfinite(info.y))
+			return false;
+		const auto& stats = GameData::Players[info.charType];
+		if (info.x < stats.halfWidth || info.x >= TileMap::Columns * TileMap::TileExtent - stats.halfWidth ||
+			info.y < stats.halfHeight || info.y >= TileMap::Rows * TileMap::TileExtent - stats.halfHeight)
+			return false;
+		auto& player = loadedPlayers[id];
+		player.used = true;
+		player.playerId = static_cast<std::uint8_t>(id);
+		player.charType = static_cast<std::uint8_t>(info.charType);
+		player.hp = static_cast<std::int16_t>(stats.hp);
+		player.moveSpeedPerSecond = stats.speedPerSecond;
+		player.size = Vector2D<float>(stats.halfWidth, stats.halfHeight);
+		player.pos = player.lastPos = Vector2D<float>(info.x, info.y);
+		player.aimPos = player.pos + Vector2D<float>(1, 0);
+		player.weapon = WEAPON_SWORD;
+		player.ammo[WEAPON_SWORD] = 1;
+		++playerCount;
+	}
+	if (playerCount == 0)
+		return false;
+	for (const auto& player : loadedPlayers)
+		if (player.used && IsPlayerBlocked(initialMap, player.pos, player.size))
+			return false;
+	players = std::move(loadedPlayers);
+	map = std::move(initialMap);
+	enemies.clear();
+	bullets.clear();
+	drops.clear();
+	boss.reset();
+	events.clear();
+	stage = phase = 1;
+	tick = 0;
+	portalOpen = false;
+	portalPos = {};
+	return true;
+}
 
 void World::Tick(float deltaTime)
 {
-	// [S9] World::Tick: 한 틱 실행 (S10 → S11 → S12 → S13)
+	// [S9] World::Tick: S10 → S11 → S12 → S13 순서로 고정 틱 실행
+	if (stage == 0)
+		return;
+	++tick;
+	UpdatePlayers(deltaTime);
+	UpdateBullets(deltaTime);
+	ResolveCollisions();
+	UpdateEnemies(deltaTime);
+	if (boss && boss->active)
+		boss->Update(deltaTime, *this);
+	UpdateStage();
+	CheckGameEnd();
+	FlushEvents();
+	SendSnapshot();
 }
 
 void World::UpdatePlayers(float deltaTime)
