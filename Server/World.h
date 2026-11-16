@@ -25,6 +25,9 @@ private:
 	int stage = 0;
 	int phase = 0;
 	std::uint32_t tick = 0;
+	bool portalOpen = false;
+	Vector2D<float> portalPos;
+	std::vector<std::vector<char>> events;	// 이번 틱의 Protocol.h 이벤트 패킷 바이트
 
 public:
 	void Tick(float deltaTime);	// 경과 시간은 초 단위
@@ -37,4 +40,12 @@ public:
 	void UpdateEnemies(float deltaTime);
 	ServerPlayer* FindNearestPlayer(const Vector2D<float>& pos) const;
 	void DamageEnemy(ServerEnemy& enemy, int damage);
+	void SpawnWave();
+	void UpdateStage();
+	bool LoadStage(int nextStage);
+	bool CheckGameEnd();		// 게임 종료가 판정되면 true
+	void RemoveLeftPlayers();
+	void PushEvent(const void* packet, int size);	// Protocol.h에 정의된 이벤트 패킷
+	void FlushEvents();
+	void SendSnapshot();
 };

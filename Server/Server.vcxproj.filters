@@ -9,6 +9,7 @@
     <ClCompile Include="ServerPlayer.cpp" />
     <ClCompile Include="ServerEnemy.cpp" />
     <ClCompile Include="BehaviorTree.cpp" />
+    <ClCompile Include="ServerBoss.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\Common\Protocol.h" />
@@ -24,5 +25,6 @@
     <ClInclude Include="Bullet.h" />
     <ClInclude Include="ServerEnemy.h" />
     <ClInclude Include="BehaviorTree.h" />
+    <ClInclude Include="ServerBoss.h" />
   </ItemGroup>
 </Project>

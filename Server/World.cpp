@@ -2,6 +2,7 @@
 #include "Bullet.h"
 #include "ServerPlayer.h"
 #include "ServerEnemy.h"
+#include "ServerBoss.h"
 
 void World::Tick(float deltaTime)
 {
@@ -53,4 +54,47 @@ ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
 void World::DamageEnemy(ServerEnemy& enemy, int damage)
 {
 	// [S11] World::DamageEnemy: 적 피격, 사망, 드랍 생성
+}
+
+void World::SpawnWave()
+{
+	// [S12] World::SpawnWave: 현재 스테이지·웨이브 표대로 적 생성
+}
+
+void World::UpdateStage()
+{
+	// [S12] World::UpdateStage: 다음 웨이브, 포탈 열기, 생존자 전원의 E키 상호작용으로 이동 판단
+}
+
+bool World::LoadStage(int nextStage)
+{
+	// [S12] World::LoadStage: 맵 교체, 플레이어 이동·부활, 보스 생성
+	return false;
+}
+
+bool World::CheckGameEnd()
+{
+	// [S12] World::CheckGameEnd: 클리어·전멸·전원 이탈 판정, EndGame 호출
+	return false;
+}
+
+void World::RemoveLeftPlayers()
+{
+	// [S12] World::RemoveLeftPlayers: room.lock을 잡고 이탈 목록을 꺼낸 뒤 월드의 해당 플레이어 제거
+}
+
+void World::PushEvent(const void* packet, int size)
+{
+	// [S13] World::PushEvent: Protocol.h 이벤트 패킷 바이트를 이번 틱 목록에 복사
+}
+
+void World::FlushEvents()
+{
+	// [S13] World::FlushEvents: 모은 이벤트를 Broadcast로 송신 큐에 넣고 목록 비우기
+}
+
+void World::SendSnapshot()
+{
+	// [S13] World::SendSnapshot: S2C_SNAPSHOT_PACKET에 틱·플레이어·적·보스 상태를 담아 Broadcast
+	// enemyCount만큼의 가변 길이로 전송, room.lock을 잡은 채 Broadcast를 부르지 않는다
 }
