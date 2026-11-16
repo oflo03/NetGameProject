@@ -21,7 +21,7 @@ int CountLoggedIn()
 	return 0;
 }
 
-void SendLoginResult(Session* s, uint8_t result, uint8_t playerId)
+void SendLoginResult(Session* s, LoginResult result, UINT8 playerId)
 {
 	// [S3] SendLoginResult: S2C_LOGIN_RESULT를 EnqueueSend
 }
@@ -30,7 +30,7 @@ void SendLoginResult(Session* s, uint8_t result, uint8_t playerId)
 
 void HandleSelectChar(Session* s, const C2S_SELECT_CHAR_PACKET* packet)
 {
-	// [S4] HandleSelectChar: room.lock을 잡고 로그인 전이거나 게임 중이거나 charType이 marin·knight가 아니면 무시, charType 갱신
+	// [S4] HandleSelectChar: room.lock을 잡고 로그인 전이거나 게임 중이거나 charType이 CHAR_MARIN·CHAR_KNIGHT가 아니면 무시, charType 갱신
 	// 락을 푼 뒤 BroadcastRoomInfo
 }
 
@@ -112,7 +112,7 @@ void DispatchPacket(Session* s, const PacketHeader* packet)
 
 void HandleInput(Session* s, const C2S_INPUT_PACKET* packet)
 {
-	// [S6] HandleInput: 게임 중인지 확인, inputLock을 잡고 input 갱신 (구르기·무기 교체 비트는 TakeInput 전까지 유지)
+	// [S6] HandleInput: 게임 중인지 확인, inputLock을 잡고 input 갱신 (구르기·무기 교체 비트와 WEAPON_KEEP 아닌 weapon은 TakeInput 전까지 유지)
 }
 
 void HandleInteract(Session* s)
@@ -122,7 +122,7 @@ void HandleInteract(Session* s)
 
 InputState TakeInput(int playerId)
 {
-	// [S6] TakeInput: room.lock → 해당 세션 inputLock 순서로 잡고 input을 꺼냄, 한 번만 쓰는 비트(구르기·무기 교체·interact)는 비움
+	// [S6] TakeInput: room.lock → 해당 세션 inputLock 순서로 잡고 input을 꺼냄, 한 번만 쓰는 값(구르기·무기 교체 비트, interact)은 비우고 weapon은 WEAPON_KEEP으로
 	return {};
 }
 
