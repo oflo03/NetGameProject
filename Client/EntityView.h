@@ -41,3 +41,23 @@ public:
 	void update();
 	void draw(HDC dc);
 };
+
+class BulletView
+{
+private:
+	BulletSpawn spawn{};
+	Vector2D<float> position{};
+
+public:
+	void update();
+	void draw(HDC dc);
+};
+
+class DropView
+{
+private:
+	S2C_DROP_PACKET drop{};
+
+public:
+	void draw(HDC dc);
+};

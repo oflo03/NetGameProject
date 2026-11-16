@@ -35,3 +35,18 @@ void BossView::draw(HDC dc)
 {
 	// [C9] draw: 보스 본체와 손 그리기
 }
+
+void BulletView::update()
+{
+	// [C6] update: 서버와 같은 공식으로 총알 이동 재현
+}
+
+void BulletView::draw(HDC dc)
+{
+	// [C9] draw: 총알 그리기
+}
+
+void DropView::draw(HDC dc)
+{
+	// [C9] draw: 드랍 아이템 그리기
+}
