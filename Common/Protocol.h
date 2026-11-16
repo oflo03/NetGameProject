@@ -1,19 +1,21 @@
 #pragma once
-#include <cstdint>
+#include <basetsd.h>	// UINT8·UINT16·UINT32 (Windows.h 없이 include해도 되게)
 
-// ---- 서버·클라이언트 공용 패킷 정의 ----
-// 모든 패킷은 [size 2바이트][type 1바이트][내용]. size는 헤더를 포함한 전체 길이.
-// 게임 수치의 종류 값(무기, 총알, 적, 이펙트 등)은 클라이언트 원작 enum 값을 그대로 쓴다.
+// 패킷 구조
+// [size 2바이트][type 1바이트][내용]
 
-constexpr uint16_t SERVER_PORT = 9000;
+// size는 헤더를 포함
+// 네트워크 바이트 정렬로 변환하지 않는걸로 통일
+
+constexpr UINT16 SERVER_PORT = 9000;
 constexpr int MAX_PLAYERS = 3;
-constexpr int NAME_LEN = 16;			// 닉네임 글자 수 (널 포함)
-constexpr int MAX_PACKET_SIZE = 4096;	// size가 이보다 크면 잘못된 패킷
-constexpr int MAX_ENEMIES = 64;			// 스냅샷 하나에 담는 적 수
-constexpr int MAX_SPAWN_BULLETS = 64;	// 총알 생성 패킷 하나에 담는 총알 수 (보스 원형 탄막 40발)
-constexpr int WEAPON_COUNT = 5;			// SWORD, PISTOL, RIFLE, SHOTGUN, ROCKET
+constexpr int NAME_LEN = 16; // NULL 포함
+constexpr int MAX_PACKET_SIZE = 4096;
+constexpr int MAX_ENEMIES = 64;
+constexpr int MAX_SPAWN_BULLETS = 64;
+constexpr int WEAPON_COUNT = 5;
 
-enum PacketType : uint8_t
+enum PacketType : UINT8
 {
 	// Client → Server
 	C2S_LOGIN = 1,
@@ -42,13 +44,34 @@ enum PacketType : uint8_t
 	S2C_PLAYER_LEFT,
 };
 
-enum LoginResult : uint8_t
+enum CharType : UINT8
+{
+	CHAR_MARIN, CHAR_KNIGHT
+};
+
+enum EnemyType : UINT8
+{
+	ENEMY_PISTOLMAN, ENEMY_RIFLEMAN, ENEMY_SHOTGUNMAN, ENEMY_BAT, ENEMY_BOMBSHE
+};
+
+enum WeaponType : UINT8
+{
+	WEAPON_SWORD, WEAPON_PISTOL, WEAPON_RIFLE, WEAPON_SHOTGUN, WEAPON_ROCKET,
+	WEAPON_KEEP = 0xFF // C2S_INPUT에서 1~5키 안 누름
+};
+
+enum LoginResult : UINT8
 {
 	LOGIN_OK, LOGIN_NAME_TAKEN, LOGIN_FULL, LOGIN_IN_GAME
 };
 
+enum ReadyState : UINT8
+{
+	READY_NO, READY_YES
+};
+
 // C2S_INPUT의 keys 비트
-enum InputKey : uint8_t
+enum InputKey : UINT8
 {
 	KEY_UP = 1 << 0,
 	KEY_DOWN = 1 << 1,
@@ -60,17 +83,17 @@ enum InputKey : uint8_t
 	KEY_WEAPON_NEXT = 1 << 7,	// Tab, 마우스 X2
 };
 
-enum PlayerEvent : uint8_t
+enum PlayerEvent : UINT8
 {
 	PE_HIT, PE_DEAD, PE_SWORD, PE_PICKUP, PE_REVIVE
 };
 
-enum BossPattern : uint8_t
+enum BossPattern : UINT8
 {
 	BOSS_IDLE, BOSS_A, BOSS_B, BOSS_C, BOSS_D, BOSS_SUMMON, BOSS_DEAD
 };
 
-enum GameResult : uint8_t
+enum GameResult : UINT8
 {
 	RESULT_CLEAR, RESULT_WIPE
 };
@@ -79,176 +102,186 @@ enum GameResult : uint8_t
 
 struct PacketHeader
 {
-	uint16_t size;
+	UINT16 size;
 	PacketType type;
 };
 
 // ---- Client → Server ----
 
+// 저 이름 이거 쓸래요
 struct C2S_LOGIN_PACKET : PacketHeader
 {
 	wchar_t name[NAME_LEN];
 };
 
+// 캐릭터 이거 할게요
 struct C2S_SELECT_CHAR_PACKET : PacketHeader
 {
-	uint8_t charType;	// playertype (marin 0, knight 1)
+	CharType charType;
 };
 
+// 준비 완료 했어요
 struct C2S_READY_PACKET : PacketHeader
 {
-	uint8_t ready;
+	ReadyState ready;
 };
 
+// 시작이나 하쇼
 struct C2S_START_PACKET : PacketHeader {};
 
-// 33ms마다 전송. 구르기·무기 교체 비트는 지난 전송 이후 한 번이라도 눌렸으면 1
+// 저 이거이거 눌렀어요
 struct C2S_INPUT_PACKET : PacketHeader
 {
-	uint8_t keys;		// InputKey 비트
-	int8_t weapon;		// 1~5키로 고른 무기 ID, 안 눌렀으면 -1
-	float aimX, aimY;	// 마우스 조준 좌표 (월드)
+	InputKey keys;
+	WeaponType weapon;
+	float aimX, aimY;
 };
 
-struct C2S_INTERACT_PACKET : PacketHeader {};	// E키 (포탈)
+// 포탈 탔어요
+struct C2S_INTERACT_PACKET : PacketHeader {};
 
 // ---- Server → Client ----
 
+// 로그인 결과 알려줄게요
 struct S2C_LOGIN_RESULT_PACKET : PacketHeader
 {
-	uint8_t result;		// LoginResult
-	uint8_t playerId;	// 0 ~ MAX_PLAYERS-1, 실패면 무시
+	LoginResult result;
+	UINT8 playerId;
 };
 
 struct RoomMember
 {
-	uint8_t used;
-	uint8_t charType;
-	uint8_t ready;
+	UINT8 used;
+	CharType charType;
+	UINT8 ready;
 	wchar_t name[NAME_LEN];
 };
 
+// 니 방에 이것들 있어요
 struct S2C_ROOM_INFO_PACKET : PacketHeader
 {
-	uint8_t hostId;
-	RoomMember members[MAX_PLAYERS];	// 인덱스 = playerId
+	UINT8 hostId; // 방장이 나가면 남은 사람 중 가장 작은 ID
+	RoomMember members[MAX_PLAYERS];
 };
 
 struct StartPlayer
 {
-	uint8_t used;
-	uint8_t charType;
+	UINT8 used;
+	CharType charType;
 	float x, y;
 };
 
+// 게임 시작할게요
 struct S2C_GAME_START_PACKET : PacketHeader
 {
-	StartPlayer players[MAX_PLAYERS];	// 인덱스 = playerId
+	StartPlayer players[MAX_PLAYERS];
 };
 
+// 스테이지 로드하세요
 struct S2C_STAGE_LOAD_PACKET : PacketHeader
 {
-	uint8_t stage;	// 1~3, 4는 보스 (컷신)
+	UINT8 stage;	// 1~3, 4는 보스 (컷신)
 };
 
 struct PlayerSnap
 {
-	uint8_t used;
-	uint8_t state;		// STATE
+	UINT8 used;
+	UINT8 state;
 	float x, y;
-	float angle;		// 조준 각도
-	int16_t hp;
-	uint8_t weapon;		// 무기 ID
-	uint8_t ammo[WEAPON_COUNT];
+	float angle;
+	UINT16 hp;
+	WeaponType weapon;
+	UINT8 ammo[WEAPON_COUNT];
 };
 
 struct EnemySnap
 {
-	uint16_t id;
-	uint8_t state;
+	UINT16 id;
+	UINT8 state;
 	float x, y;
 	float angle;
-	int16_t hp;
+	UINT16 hp;
 };
 
 struct BossSnap
 {
-	uint8_t active;
+	UINT8 active;
 	float x, y;
 	float handX[2], handY[2];
-	uint8_t handType[2];
-	int16_t hp;
+	UINT8 handType[2];
+	UINT16 hp;
 };
 
-// enemies는 enemyCount개만 보낸다: size = offsetof(S2C_SNAPSHOT_PACKET, enemies) + enemyCount * sizeof(EnemySnap)
+// 월드 스냅샷
 struct S2C_SNAPSHOT_PACKET : PacketHeader
 {
-	uint32_t tick;
-	PlayerSnap players[MAX_PLAYERS];	// 인덱스 = playerId
+	UINT32 tick;
+	PlayerSnap players[MAX_PLAYERS];
 	BossSnap boss;
-	uint8_t enemyCount;
+	UINT8 enemyCount;
 	EnemySnap enemies[MAX_ENEMIES];
 };
 
 struct BulletSpawn
 {
-	uint16_t id;		// 서버가 발급, 한 바퀴 돌면 재사용
-	uint8_t type;		// bullet_table
-	uint8_t side;		// 플레이어 총알 / 적 총알
+	UINT16 id;
+	UINT8 type;
+	UINT8 side;
 	float x, y;
-	float dirX, dirY;	// 이동은 클라이언트가 같은 공식으로 재현
+	float dirX, dirY;
 };
 
-// bullets는 count개만 보낸다 (스냅샷과 같은 방식)
+// 총알 생겼어요
 struct S2C_BULLET_SPAWN_PACKET : PacketHeader
 {
-	uint8_t count;
+	UINT8 count;
 	BulletSpawn bullets[MAX_SPAWN_BULLETS];
 };
 
+// 총알 사라졌어요
 struct S2C_BULLET_REMOVE_PACKET : PacketHeader
 {
-	uint16_t id;
-	uint8_t hit;	// 1이면 소멸 위치에 피격 이펙트
+	UINT16 id;
+	UINT8 hit;
 	float x, y;
 };
 
 struct S2C_ENEMY_SPAWN_PACKET : PacketHeader
 {
-	uint16_t id;
-	uint8_t type;	// enemytype
+	UINT16 id;
+	EnemyType type;
 	float x, y;
 };
 
 struct S2C_ENEMY_DEAD_PACKET : PacketHeader
 {
-	uint16_t id;
+	UINT16 id;
 };
 
 struct S2C_PLAYER_EVENT_PACKET : PacketHeader
 {
-	uint8_t playerId;
-	uint8_t event;	// PlayerEvent
-	uint8_t value;	// PE_PICKUP: 얻은 아이템 (DROP)
+	UINT8 playerId;
+	PlayerEvent event;
+	UINT8 value;
 };
 
 struct S2C_DROP_PACKET : PacketHeader
 {
-	uint16_t id;
-	uint8_t add;	// 1 생성, 0 제거
-	uint8_t type;	// DROP
+	UINT16 id;
+	UINT8 add;
+	UINT8 type;
 	float x, y;
 };
 
 struct S2C_EFFECT_PACKET : PacketHeader
 {
-	uint8_t type;	// CEffect
+	UINT8 type;
 	float x, y;
 };
 
 struct S2C_BOSS_PACKET : PacketHeader
 {
-	uint8_t pattern;	// BossPattern
+	BossPattern pattern;
 };
 
 struct S2C_PORTAL_PACKET : PacketHeader
@@ -258,12 +291,12 @@ struct S2C_PORTAL_PACKET : PacketHeader
 
 struct S2C_GAME_END_PACKET : PacketHeader
 {
-	uint8_t result;	// GameResult
+	GameResult result;
 };
 
 struct S2C_PLAYER_LEFT_PACKET : PacketHeader
 {
-	uint8_t playerId;
+	UINT8 playerId;
 };
 
 #pragma pack(pop)
