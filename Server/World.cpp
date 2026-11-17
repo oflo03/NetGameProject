@@ -97,7 +97,10 @@ void World::Tick(float deltaTime)
 
 void World::UpdatePlayers(float deltaTime)
 {
-	// [S10] World::UpdatePlayers: 플레이어마다 TakeInput으로 입력을 가져와 적용
+	// [S10] 세션 입력 잠금은 TakeInput 내부에서 처리한다.
+	for (auto& player : players)
+		if (player.used)
+			player.ApplyInput(TakeInput(player.playerId), deltaTime, *this);
 }
 
 Bullet* World::SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir)
@@ -113,7 +116,26 @@ void World::UpdateBullets(float deltaTime)
 
 void World::ResolveCollisions()
 {
-	// [S10] World::ResolveCollisions: 벽, 총알, 드랍 충돌과 피격 판정
+	// [S10] 작은 이동 구간마다 축별로 검사해 벽·물에서 미끄러진다.
+	for (auto& player : players) {
+		if (!player.used || player.hp <= 0)
+			continue;
+		const auto movement = player.pos - player.lastPos;
+		const float distance = std::max(std::abs(movement.x), std::abs(movement.y));
+		const int steps = std::max(1, static_cast<int>(std::ceil(distance / 4.0f)));
+		const auto step = movement / static_cast<float>(steps);
+		auto resolved = player.lastPos;
+		for (int i = 0; i < steps; ++i) {
+			const auto horizontal = resolved + Vector2D<float>(step.x, 0);
+			if (!IsPlayerBlocked(map, horizontal, player.size))
+				resolved.x = horizontal.x;
+			const auto vertical = resolved + Vector2D<float>(0, step.y);
+			if (!IsPlayerBlocked(map, vertical, player.size))
+				resolved.y = vertical.y;
+		}
+		player.pos = resolved;
+	}
+
 }
 
 void World::SwordSlash(ServerPlayer& player)

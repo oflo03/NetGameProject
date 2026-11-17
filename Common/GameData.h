@@ -25,6 +25,9 @@ namespace GameData
 		{ 6, 200.0f, 18.0f, 25.0f },	// CHAR_KNIGHT
 	};
 	inline constexpr float PlayerSpawnSpacing = 48.0f;
+	inline constexpr float RollDurationSeconds = 0.5f;
+	inline constexpr float RollMoveSeconds = 1.0f / 3.0f;
+	inline constexpr float RollSpeedMultiplier = 3.0f;
 
 	struct WeaponStats
 	{
