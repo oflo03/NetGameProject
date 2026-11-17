@@ -17,10 +17,12 @@ private:
 	SOCKET sock = INVALID_SOCKET;
 	char recvBuffer[RECV_BUFFER_SIZE] = {};
 	int recvLength = 0;
+	bool receiveEnded = false;
 	std::vector<char> sendBuffer;
 	ConnectionState connectionState = ConnectionState::CS_DISCONNECTED;
 	ULONGLONG connectStartTime = 0;
 	NetworkManager();
+	void CloseTransport();
 
 public:
 	static NetworkManager* getInstance();
