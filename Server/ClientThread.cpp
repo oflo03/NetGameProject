@@ -1,4 +1,5 @@
 #include "ClientThread.h"
+#include <cstring>
 
 // ---- S3 로그인 처리 ----
 
@@ -71,12 +72,37 @@ void ClientThreadMain(Session* s)
 void RecvAll(Session* s)
 {
 	// [S5] RecvAll: recv를 WSAEWOULDBLOCK까지 반복해 recvBuffer 뒤에 붙임, 0이나 오류면 connected = false
+	while (s->recvLength < (int)sizeof(s->recvBuffer)) {
+		int received = recv(s->sock, s->recvBuffer + s->recvLength, (int)sizeof(s->recvBuffer) - s->recvLength, 0);
+		if (received > 0) {
+			s->recvLength += received;
+			continue;
+		}
+		if (received == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+			return;
+		s->connected = false;	// 0이면 상대가 끊음
+		return;
+	}
 }
 
 void ProcessPackets(Session* s)
 {
 	// [S5] ProcessPackets: recvBuffer를 size 단위로 잘라 DispatchPacket 호출, 남은 조각은 앞으로 당김
 	// size가 헤더보다 작거나 MAX_PACKET_SIZE보다 크면 connected = false
+	int offset = 0;
+	while (s->connected && s->recvLength - offset >= (int)sizeof(PacketHeader)) {
+		const PacketHeader* packet = (const PacketHeader*)(s->recvBuffer + offset);
+		if (packet->size < sizeof(PacketHeader) || packet->size > MAX_PACKET_SIZE) {
+			s->connected = false;
+			return;
+		}
+		if (s->recvLength - offset < packet->size)
+			break;
+		DispatchPacket(s, packet);
+		offset += packet->size;
+	}
+	memmove(s->recvBuffer, s->recvBuffer + offset, s->recvLength - offset);
+	s->recvLength -= offset;
 }
 
 void DispatchPacket(Session* s, const PacketHeader* packet)
@@ -103,7 +129,7 @@ void DispatchPacket(Session* s, const PacketHeader* packet)
 		HandleInteract(s);
 		break;
 	default:
-		// [S5] 모르는 패킷 종류면 connected = false
+		s->connected = false;	// 모르는 패킷 종류
 		break;
 	}
 }
@@ -131,16 +157,36 @@ InputState TakeInput(int playerId)
 void EnqueueSend(Session* s, const void* packet, int size)
 {
 	// [S7] EnqueueSend: sendLock을 잡고 sendQueue 뒤에 패킷 바이트 추가
+	const char* bytes = (const char*)packet;
+	std::lock_guard<std::mutex> lock(s->sendLock);
+	s->sendQueue.insert(s->sendQueue.end(), bytes, bytes + size);
 }
 
 void Broadcast(const void* packet, int size)
 {
 	// [S7] Broadcast: room.lock을 잡고 로그인한 모든 세션에 EnqueueSend
+	std::lock_guard<std::mutex> lock(room.lock);
+	for (Session& s : room.sessions) {
+		if (s.used && s.playerId >= 0)
+			EnqueueSend(&s, packet, size);
+	}
 }
 
 void FlushSend(Session* s)
 {
 	// [S7] FlushSend: sendLock을 잡고 sendQueue를 send, 보낸 만큼 앞에서 지움 (WSAEWOULDBLOCK이면 다음 루프에), 오류면 connected = false
+	std::lock_guard<std::mutex> lock(s->sendLock);
+	int sentTotal = 0;
+	while (sentTotal < (int)s->sendQueue.size()) {
+		int sent = send(s->sock, s->sendQueue.data() + sentTotal, (int)s->sendQueue.size() - sentTotal, 0);
+		if (sent == SOCKET_ERROR) {
+			if (WSAGetLastError() != WSAEWOULDBLOCK)
+				s->connected = false;
+			break;
+		}
+		sentTotal += sent;
+	}
+	s->sendQueue.erase(s->sendQueue.begin(), s->sendQueue.begin() + sentTotal);
 }
 
 // ---- S8 접속 종료 처리 ----
