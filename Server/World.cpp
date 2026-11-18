@@ -193,16 +193,68 @@ void World::RemoveLeftPlayers()
 
 void World::PushEvent(const void* packet, int size)
 {
-	// [S13] World::PushEvent: Protocol.h 이벤트 패킷 바이트를 이번 틱 목록에 복사
+	// [S13] Protocol.h 이벤트 패킷을 소유하는 바이트 배열로 복사한다.
+	if (!packet || size < static_cast<int>(sizeof(PacketHeader)) || size > MAX_PACKET_SIZE)
+		return;
+	PacketHeader header{};
+	std::memcpy(&header, packet, sizeof(header));
+	if (header.size != size || header.type < S2C_BULLET_SPAWN || header.type > S2C_PLAYER_LEFT)
+		return;
+	std::vector<char> bytes(static_cast<std::size_t>(size));
+	std::memcpy(bytes.data(), packet, bytes.size());
+	events.push_back(std::move(bytes));
 }
 
 void World::FlushEvents()
 {
-	// [S13] World::FlushEvents: 모은 이벤트를 Broadcast로 송신 큐에 넣고 목록 비우기
+	// [S13] 소켓 대신 세션별 송신 큐로 이벤트를 전달한다.
+	for (const auto& event : events)
+		Broadcast(event.data(), static_cast<int>(event.size()));
+	events.clear();
 }
 
 void World::SendSnapshot()
 {
-	// [S13] World::SendSnapshot: S2C_SNAPSHOT_PACKET에 틱·플레이어·적·보스 상태를 담아 Broadcast
-	// enemyCount만큼의 가변 길이로 전송, room.lock을 잡은 채 Broadcast를 부르지 않는다
+	// [S13] 매 틱 플레이어·적·보스 상태를 가변 길이로 전송한다.
+	S2C_SNAPSHOT_PACKET packet{};
+	packet.type = S2C_SNAPSHOT;
+	packet.tick = tick;
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		const auto& player = players[id];
+		if (!player.used)
+			continue;
+		auto& state = packet.players[id];
+		state.used = 1;
+		state.state = player.state;
+		state.x = player.pos.x;
+		state.y = player.pos.y;
+		state.angle = player.angle;
+		state.hp = static_cast<UINT16>(std::max(0, static_cast<int>(player.hp)));
+		state.weapon = static_cast<WeaponType>(player.weapon);
+		std::copy(player.ammo.begin(), player.ammo.end(), state.ammo);
+	}
+	for (const auto& enemy : enemies) {
+		if (!enemy || !enemy->active || packet.enemyCount == MAX_ENEMIES)
+			continue;
+		auto& state = packet.enemies[packet.enemyCount++];
+		state.id = enemy->id;
+		state.state = enemy->state;
+		state.x = enemy->pos.x;
+		state.y = enemy->pos.y;
+		state.angle = enemy->angle;
+		state.hp = static_cast<UINT16>(std::max(0, static_cast<int>(enemy->hp)));
+	}
+	if (boss && boss->active) {
+		packet.boss.active = 1;
+		packet.boss.x = boss->pos.x;
+		packet.boss.y = boss->pos.y;
+		packet.boss.hp = static_cast<UINT16>(std::max(0, static_cast<int>(boss->hp)));
+		for (int hand = 0; hand < 2; ++hand) {
+			packet.boss.handX[hand] = boss->handPos[hand].x;
+			packet.boss.handY[hand] = boss->handPos[hand].y;
+			packet.boss.handType[hand] = boss->handType[hand];
+		}
+	}
+	packet.size = static_cast<UINT16>(offsetof(S2C_SNAPSHOT_PACKET, enemies) + packet.enemyCount * sizeof(EnemySnap));
+	Broadcast(&packet, packet.size);
 }
