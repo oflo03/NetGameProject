@@ -6,6 +6,28 @@ namespace GameData
 {
 	// 원작 WM_TIMER(10ms)에서 프레임마다 적용하던 값의 환산 기준
 	inline constexpr float OriginalUpdatesPerSecond = 100.0f;
+	inline constexpr int LogicIntervalMs = 33;
+
+	enum PlayerState : std::uint8_t
+	{
+		PLAYER_IDLE, PLAYER_RUN, PLAYER_DAMAGED, PLAYER_DEAD, PLAYER_ROLL
+	};
+	struct PlayerStats
+	{
+		int hp;
+		float speedPerSecond;
+		float halfWidth;
+		float halfHeight;
+	};
+	// CharType 순서. 원작 이동 속도와 충돌 박스 절반 크기.
+	inline constexpr PlayerStats Players[] = {
+		{ 10, 200.0f, 18.0f, 22.0f },	// CHAR_MARIN
+		{ 6, 200.0f, 18.0f, 25.0f },	// CHAR_KNIGHT
+	};
+	inline constexpr float PlayerSpawnSpacing = 48.0f;
+	inline constexpr float RollDurationSeconds = 0.5f;
+	inline constexpr float RollMoveSeconds = 1.0f / 3.0f;
+	inline constexpr float RollSpeedMultiplier = 3.0f;
 
 	struct WeaponStats
 	{
