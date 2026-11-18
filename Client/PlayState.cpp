@@ -1,4 +1,9 @@
 #include "PlayState.h"
+#include "NetworkManager.h"
+
+namespace {
+	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
+}
 
 void PlayState::update()
 {
@@ -7,7 +12,8 @@ void PlayState::update()
 
 void PlayState::handle_events()
 {
-	// [C7] handle_events: 서버로 보낼 입력 처리
+	SampleInput();
+	SendInput();
 }
 
 void PlayState::draw()
@@ -67,16 +73,75 @@ void PlayState::OnStageLoad(const S2C_STAGE_LOAD_PACKET& packet)
 
 void PlayState::SampleInput()
 {
-	// [C7] SampleInput: 키보드·마우스 상태 수집
+	UINT8 keys = input.keys & actionMask;
+	input.keys = static_cast<InputKey>(keys);
+	const HWND window = GetActiveWindow();
+	if (!window)
+		return;
+
+	const auto held = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+	if (held('W')) keys |= KEY_UP;
+	if (held('S')) keys |= KEY_DOWN;
+	if (held('A')) keys |= KEY_LEFT;
+	if (held('D')) keys |= KEY_RIGHT;
+	if (held(VK_LBUTTON)) keys |= KEY_ATTACK;
+
+	UINT8 actions = 0;
+	if (held(VK_RBUTTON)) actions |= KEY_ROLL;
+	if (held(VK_CONTROL) || held(VK_XBUTTON1)) actions |= KEY_WEAPON_PREV;
+	if (held(VK_TAB) || held(VK_XBUTTON2)) actions |= KEY_WEAPON_NEXT;
+	input.keys = static_cast<InputKey>(keys | (actions & ~previousActions));
+	previousActions = actions;
+
+	UINT8 weapons = 0;
+	for (int i = 0; i < WEAPON_COUNT; ++i) {
+		const auto bit = static_cast<UINT8>(1 << i);
+		if (!held('1' + i))
+			continue;
+		weapons |= bit;
+		if (!(previousWeapons & bit))
+			input.weapon = static_cast<WeaponType>(i);
+	}
+	previousWeapons = weapons;
+	const bool interact = held('E');
+	interactPending |= interact && !interactHeld;
+	interactHeld = interact;
+
+	POINT point = mPoint;
+	if (ScreenToClient(window, &point)) {
+		const auto aim = ScreenToWorld(point);
+		input.aimX = aim.x;
+		input.aimY = aim.y;
+	}
 }
 
 Vector2D<float> PlayState::ScreenToWorld(POINT point) const
 {
-	// [C7] ScreenToWorld: 화면 좌표를 맵 좌표로 변환
-	return {};
+	const LONG width = screen.right - screen.left;
+	const LONG height = screen.bottom - screen.top;
+	if (width <= 0 || height <= 0)
+		return camPos;
+	return {
+		camPos.x + (static_cast<float>(point.x - screen.left) / width * 2 - 1) * camSize.x,
+		camPos.y + (static_cast<float>(point.y - screen.top) / height * 2 - 1) * camSize.y
+	};
 }
 
 void PlayState::SendInput()
 {
-	// [C7] SendInput: 33ms마다 C2S_INPUT 전송, E키는 C2S_INTERACT
+	const auto now = GetTickCount64();
+	if (now - lastInputSend < 33)
+		return;
+	lastInputSend = now;
+
+	auto* network = NetworkManager::getInstance();
+	network->Send(&input, sizeof(input));
+	input.keys = static_cast<InputKey>(input.keys & ~actionMask);
+	input.weapon = WEAPON_KEEP;
+
+	if (interactPending) {
+		const C2S_INTERACT_PACKET packet{{sizeof(C2S_INTERACT_PACKET), C2S_INTERACT}};
+		network->Send(&packet, sizeof(packet));
+		interactPending = false;
+	}
 }
