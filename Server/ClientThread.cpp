@@ -1,5 +1,6 @@
 #include "ClientThread.h"
 #include <cstring>
+#include <cmath>
 
 // ---- S3 로그인 처리 ----
 
@@ -136,19 +137,62 @@ void DispatchPacket(Session* s, const PacketHeader* packet)
 
 // ---- S6 입력 처리 ----
 
+namespace {
+	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
+
+	// room.lock을 잡은 상태에서 확인
+	bool CanAcceptInput(const Session& session)
+	{
+		return room.state == ROOM_IN_GAME && session.used && session.connected &&
+			session.playerId >= 0 && session.playerId < MAX_PLAYERS;
+	}
+}
+
 void HandleInput(Session* s, const C2S_INPUT_PACKET* packet)
 {
-	// [S6] HandleInput: 게임 중인지 확인, inputLock을 잡고 input 갱신 (구르기·무기 교체 비트와 WEAPON_KEEP 아닌 weapon은 TakeInput 전까지 유지)
+	if (!s || !packet || packet->size != sizeof(C2S_INPUT_PACKET) ||
+		!std::isfinite(packet->aimX) || !std::isfinite(packet->aimY))
+		return;
+	if (packet->weapon != WEAPON_KEEP && packet->weapon > WEAPON_ROCKET)
+		return;
+
+	std::lock_guard roomGuard(room.lock);
+	if (!CanAcceptInput(*s))
+		return;
+	std::lock_guard inputGuard(s->inputLock);
+	auto& input = s->input;
+	input.keys = static_cast<InputKey>(packet->keys | (input.keys & actionMask));
+	if (packet->weapon != WEAPON_KEEP)
+		input.weapon = packet->weapon;
+	input.aimX = packet->aimX;
+	input.aimY = packet->aimY;
 }
 
 void HandleInteract(Session* s)
 {
-	// [S6] HandleInteract: 게임 중인지 확인, inputLock을 잡고 input.interact = true
+	std::lock_guard roomGuard(room.lock);
+	if (!s || !CanAcceptInput(*s))
+		return;
+	std::lock_guard inputGuard(s->inputLock);
+	s->input.interact = true;
 }
 
 InputState TakeInput(int playerId)
 {
-	// [S6] TakeInput: room.lock → 해당 세션 inputLock 순서로 잡고 input을 꺼냄, 한 번만 쓰는 값(구르기·무기 교체 비트, interact)은 비우고 weapon은 WEAPON_KEEP으로
+	if (playerId < 0 || playerId >= MAX_PLAYERS)
+		return {};
+
+	std::lock_guard roomGuard(room.lock);
+	for (auto& session : room.sessions) {
+		if (session.playerId != playerId || !CanAcceptInput(session))
+			continue;
+		std::lock_guard inputGuard(session.inputLock);
+		const InputState input = session.input;
+		session.input.keys = static_cast<InputKey>(input.keys & ~actionMask);
+		session.input.weapon = WEAPON_KEEP;
+		session.input.interact = false;
+		return input;
+	}
 	return {};
 }
 

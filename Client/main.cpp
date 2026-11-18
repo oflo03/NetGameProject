@@ -1,5 +1,6 @@
 #include "Common.h"
 #include "Framework.h"
+#include "NetworkManager.h"
 #include "Scenes.h"
 
 // ---- 전역 변수 정의 (선언은 Common.h) ----
@@ -52,15 +53,16 @@ double GetFrameTime()
 
 void GameTick(HWND hWnd)
 {
-	// [C4] NetworkManager::RecvAll
-	// [C4] NetworkManager::ProcessPackets
+	auto* network = NetworkManager::getInstance();
+	network->RecvAll();
+	network->ProcessPackets();
 
 	GetCursorPos(&mPoint);
 	frame_time = GetFrameTime();
 	stateStack.back()->handle_events();
 	stateStack.back()->update();
 
-	// [C8] NetworkManager::FlushSend
+	network->FlushSend();
 
 	InvalidateRect(hWnd, NULL, false);
 }

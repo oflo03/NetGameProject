@@ -12,7 +12,12 @@ public:
 	void draw() override;
 
 private:
-	C2S_INPUT_PACKET input{};
+	C2S_INPUT_PACKET input{{sizeof(C2S_INPUT_PACKET), C2S_INPUT}, {}, WEAPON_KEEP, 0, 0};
+	UINT8 previousActions = 0;
+	UINT8 previousWeapons = 0;
+	bool interactHeld = false;
+	bool interactPending = false;
+	ULONGLONG lastInputSend = 0;
 
 	void OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet);
 	void OnBulletRemove(const S2C_BULLET_REMOVE_PACKET& packet);
