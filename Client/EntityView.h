@@ -4,9 +4,11 @@
 
 class EntityView
 {
+	friend class PlayState;
 protected:
 	Vector2D<float> previousPosition{};
 	Vector2D<float> currentPosition{};
+	bool hasPosition = false;
 
 public:
 	Vector2D<float> Interpolate(float alpha) const;
@@ -14,6 +16,7 @@ public:
 
 class PlayerView : public EntityView
 {
+	friend class PlayState;
 private:
 	PlayerSnap snapshot{};
 
@@ -24,6 +27,7 @@ public:
 
 class EnemyView : public EntityView
 {
+	friend class PlayState;
 private:
 	EnemySnap snapshot{};
 
@@ -34,6 +38,7 @@ public:
 
 class BossView : public EntityView
 {
+	friend class PlayState;
 private:
 	BossSnap snapshot{};
 

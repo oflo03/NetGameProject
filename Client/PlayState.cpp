@@ -1,5 +1,9 @@
 #include "PlayState.h"
 #include "NetworkManager.h"
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <unordered_set>
 
 namespace {
 	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
@@ -19,6 +23,133 @@ void PlayState::handle_events()
 void PlayState::draw()
 {
 	// [C9] draw: 서버 상태를 바탕으로 화면 그리기
+}
+
+void PlayState::process_packet(const PacketHeader* packet)
+{
+	if (!packet || packet->size < sizeof(PacketHeader) || packet->size > MAX_PACKET_SIZE)
+		return;
+
+	// 고정 길이 패킷은 크기를 확인하고 복사한 뒤 전달
+	const auto dispatch = [this, packet]<typename T>(void (PlayState::*handler)(const T&)) {
+		if (packet->size != sizeof(T))
+			return;
+		T value{};
+		std::memcpy(&value, packet, sizeof(value));
+		(this->*handler)(value);
+	};
+
+	switch (packet->type) {
+	case S2C_SNAPSHOT:
+	{
+		constexpr size_t baseSize = offsetof(S2C_SNAPSHOT_PACKET, enemies);
+		if (packet->size < baseSize || packet->size > sizeof(S2C_SNAPSHOT_PACKET))
+			return;
+		S2C_SNAPSHOT_PACKET snapshot{};
+		std::memcpy(&snapshot, packet, packet->size);
+		if (snapshot.enemyCount > MAX_ENEMIES ||
+			packet->size != baseSize + snapshot.enemyCount * sizeof(EnemySnap))
+			return;
+		OnSnapshot(snapshot);
+		break;
+	}
+	case S2C_BULLET_SPAWN:
+	{
+		constexpr size_t baseSize = offsetof(S2C_BULLET_SPAWN_PACKET, bullets);
+		if (packet->size < baseSize || packet->size > sizeof(S2C_BULLET_SPAWN_PACKET))
+			return;
+		S2C_BULLET_SPAWN_PACKET bullets{};
+		std::memcpy(&bullets, packet, packet->size);
+		if (bullets.count > MAX_SPAWN_BULLETS ||
+			packet->size != baseSize + bullets.count * sizeof(BulletSpawn))
+			return;
+		OnBulletSpawn(bullets);
+		break;
+	}
+	case S2C_BULLET_REMOVE: dispatch(&PlayState::OnBulletRemove); break;
+	case S2C_ENEMY_SPAWN: dispatch(&PlayState::OnEnemySpawn); break;
+	case S2C_ENEMY_DEAD: dispatch(&PlayState::OnEnemyDead); break;
+	case S2C_PLAYER_EVENT: dispatch(&PlayState::OnPlayerEvent); break;
+	case S2C_DROP: dispatch(&PlayState::OnDrop); break;
+	case S2C_EFFECT: dispatch(&PlayState::OnEffect); break;
+	case S2C_BOSS: dispatch(&PlayState::OnBoss); break;
+	case S2C_PORTAL: dispatch(&PlayState::OnPortal); break;
+	case S2C_STAGE_LOAD:
+		if (packet->size == sizeof(S2C_STAGE_LOAD_PACKET)) {
+			playerViews = {};
+			enemyViews.clear();
+			bossView = {};
+			hasSnapshot = false;
+			dispatch(&PlayState::OnStageLoad);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
+{
+	if (packet.enemyCount > MAX_ENEMIES)
+		return;
+	// 같은 틱이나 오래된 스냅샷으로 상태를 되돌리지 않음
+	if (hasSnapshot) {
+		const UINT32 distance = packet.tick - snapshotTick;
+		if (distance == 0 || distance >= 0x80000000u)
+			return;
+	}
+	const auto finitePosition = [](float x, float y) {
+		return std::isfinite(x) && std::isfinite(y);
+	};
+	for (const auto& player : packet.players)
+		if (player.used && (!finitePosition(player.x, player.y) || !std::isfinite(player.angle)))
+			return;
+	if (packet.boss.active && !finitePosition(packet.boss.x, packet.boss.y))
+		return;
+	if (packet.boss.active)
+		for (int i = 0; i < 2; ++i)
+			if (!finitePosition(packet.boss.handX[i], packet.boss.handY[i]))
+				return;
+	std::unordered_set<UINT16> ids;
+	for (int i = 0; i < packet.enemyCount; ++i) {
+		const auto& enemy = packet.enemies[i];
+		if (!finitePosition(enemy.x, enemy.y) || !std::isfinite(enemy.angle) || !ids.insert(enemy.id).second)
+			return;
+	}
+
+	const auto move = [](EntityView& view, float x, float y) {
+		const Vector2D<float> position(x, y);
+		view.previousPosition = view.hasPosition ? view.currentPosition : position;
+		view.currentPosition = position;
+		view.hasPosition = true;
+	};
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		auto& view = playerViews[i];
+		if (!packet.players[i].used)
+			view = {};
+		else
+			move(view, packet.players[i].x, packet.players[i].y);
+		view.snapshot = packet.players[i];
+	}
+	for (auto it = enemyViews.begin(); it != enemyViews.end(); ) {
+		if (!ids.contains(it->first))
+			it = enemyViews.erase(it);
+		else
+			++it;
+	}
+	for (int i = 0; i < packet.enemyCount; ++i) {
+		const auto& enemy = packet.enemies[i];
+		auto& view = enemyViews[enemy.id];
+		move(view, enemy.x, enemy.y);
+		view.snapshot = enemy;
+	}
+	if (!packet.boss.active)
+		bossView = {};
+	else
+		move(bossView, packet.boss.x, packet.boss.y);
+	bossView.snapshot = packet.boss;
+	snapshotTick = packet.tick;
+	hasSnapshot = true;
 }
 
 void PlayState::OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet)

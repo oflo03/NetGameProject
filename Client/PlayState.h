@@ -2,6 +2,9 @@
 #include "Framework.h"
 #include "Common.h"
 #include "Protocol.h"
+#include "EntityView.h"
+#include <array>
+#include <unordered_map>
 
 // 서버 상태를 표시하는 온라인 플레이 화면
 class PlayState : public GameState
@@ -10,8 +13,16 @@ public:
 	void update() override;
 	void handle_events() override;
 	void draw() override;
+	void process_packet(const PacketHeader* packet) override;
 
 private:
+	std::array<PlayerView, MAX_PLAYERS> playerViews{};
+	std::unordered_map<UINT16, EnemyView> enemyViews;
+	BossView bossView;
+	bool hasSnapshot = false;
+	UINT32 snapshotTick = 0;
+
+	void OnSnapshot(const S2C_SNAPSHOT_PACKET& packet);
 	C2S_INPUT_PACKET input{{sizeof(C2S_INPUT_PACKET), C2S_INPUT}, {}, WEAPON_KEEP, 0, 0};
 	UINT8 previousActions = 0;
 	UINT8 previousWeapons = 0;

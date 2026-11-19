@@ -1,9 +1,13 @@
 #include "EntityView.h"
+#include <algorithm>
+#include <cmath>
 
 Vector2D<float> EntityView::Interpolate(float alpha) const
 {
-	// [C5] Interpolate: 두 스냅샷 사이 위치 보간
-	return {};
+	if (!std::isfinite(alpha))
+		alpha = 0;
+	alpha = std::clamp(alpha, 0.0f, 1.0f);
+	return previousPosition * (1 - alpha) + currentPosition * alpha;
 }
 
 void PlayerView::update()
