@@ -19,6 +19,13 @@ class PlayerView : public EntityView
 	friend class PlayState;
 private:
 	PlayerSnap snapshot{};
+	CharType charType = CHAR_MARIN;
+	wchar_t nickname[NAME_LEN + 1] = {};
+	Vector2D<float> renderPosition{};
+	float interpolation = 1.0f;
+	int animationState = STATE_IDLE;
+	DIRECTION direction = FRONT;
+	float animationFrame = 0.0f;
 
 public:
 	void update();

@@ -1,5 +1,8 @@
 #include "PlayState.h"
+#include "GameData.h"
+#include "Map.h"
 #include "NetworkManager.h"
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -7,11 +10,55 @@
 
 namespace {
 	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
+	constexpr int worldWidth = MapWidth * PTS;
+	constexpr int worldHeight = MapHeight * PTS;
+}
+
+PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
+	: localPlayerId(localPlayerId), roomInfo(roomInfo)
+{
+	MapManager::getInstance()->LoadTileMap(1, false);
+	camPos = { worldWidth / 2.0f, worldHeight / 2.0f };
 }
 
 void PlayState::update()
 {
-	// [C5] update: 서버에서 받은 상태로 화면 갱신
+	if (!hasSnapshot)
+		return;
+
+	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
+	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		auto& view = playerViews[i];
+		if (!view.snapshot.used)
+			continue;
+		const auto& member = roomInfo.members[i];
+		if (member.used) {
+			view.charType = member.charType;
+			std::memcpy(view.nickname, member.name, sizeof(member.name));
+		}
+		view.interpolation = alpha;
+		view.update();
+	}
+	UpdateCamera();
+}
+
+void PlayState::UpdateCamera()
+{
+	const auto isAlive = [](const PlayerView& view) {
+		return view.snapshot.used && view.snapshot.hp > 0 && view.snapshot.state != STATE_DEAD;
+	};
+	const PlayerView* target = nullptr;
+	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS &&
+		isAlive(playerViews[localPlayerId]))
+		target = &playerViews[localPlayerId];
+	else {
+		const auto survivor = std::find_if(playerViews.begin(), playerViews.end(), isAlive);
+		if (survivor != playerViews.end())
+			target = &*survivor;
+	}
+	if (target)
+		camPos = target->renderPosition;
 }
 
 void PlayState::handle_events()
@@ -22,7 +69,59 @@ void PlayState::handle_events()
 
 void PlayState::draw()
 {
-	// [C9] draw: 서버 상태를 바탕으로 화면 그리기
+	const int width = screen.right - screen.left;
+	const int height = screen.bottom - screen.top;
+	if (!mDC || width <= 0 || height <= 0 || camSize.x <= 0 || camSize.y <= 0)
+		return;
+
+	FillRect(mDC, &screen, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+	const HDC worldDC = CreateCompatibleDC(mDC);
+	if (!worldDC)
+		return;
+	const HBITMAP worldBitmap = CreateCompatibleBitmap(mDC, worldWidth, worldHeight);
+	if (!worldBitmap) {
+		DeleteDC(worldDC);
+		return;
+	}
+	const auto previousBitmap = SelectObject(worldDC, worldBitmap);
+	PatBlt(worldDC, 0, 0, worldWidth, worldHeight, BLACKNESS);
+	MapManager::getInstance()->PrintMap(worldDC);
+
+	std::array<PlayerView*, MAX_PLAYERS> visible{};
+	auto end = visible.begin();
+	for (auto& view : playerViews) {
+		const auto& pos = view.renderPosition;
+		if (view.snapshot.used && pos.x >= 0 && pos.x <= worldWidth &&
+			pos.y >= 0 && pos.y <= worldHeight)
+			*end++ = &view;
+	}
+	std::stable_sort(visible.begin(), end, [](const PlayerView* a, const PlayerView* b) {
+		return a->renderPosition.y < b->renderPosition.y;
+	});
+	for (auto it = visible.begin(); it != end; ++it)
+		(*it)->draw(worldDC);
+
+	// 카메라가 맵 바깥을 보는 부분은 검은색으로 둠
+	const float left = camPos.x - camSize.x;
+	const float top = camPos.y - camSize.y;
+	const int srcLeft = static_cast<int>(std::clamp(left, 0.0f, static_cast<float>(worldWidth)));
+	const int srcTop = static_cast<int>(std::clamp(top, 0.0f, static_cast<float>(worldHeight)));
+	const int srcRight = static_cast<int>(std::clamp(camPos.x + camSize.x, 0.0f, static_cast<float>(worldWidth)));
+	const int srcBottom = static_cast<int>(std::clamp(camPos.y + camSize.y, 0.0f, static_cast<float>(worldHeight)));
+	if (srcLeft < srcRight && srcTop < srcBottom) {
+		const float scaleX = width / (2 * camSize.x);
+		const float scaleY = height / (2 * camSize.y);
+		const int dstLeft = static_cast<int>(std::lround((srcLeft - left) * scaleX));
+		const int dstRight = static_cast<int>(std::lround((srcRight - left) * scaleX));
+		const int dstTop = static_cast<int>(std::lround((srcTop - top) * scaleY));
+		const int dstBottom = static_cast<int>(std::lround((srcBottom - top) * scaleY));
+		StretchBlt(mDC, screen.left + dstLeft, screen.top + dstTop, dstRight - dstLeft, dstBottom - dstTop,
+			worldDC, srcLeft, srcTop, srcRight - srcLeft, srcBottom - srcTop, SRCCOPY);
+	}
+
+	SelectObject(worldDC, previousBitmap);
+	DeleteObject(worldBitmap);
+	DeleteDC(worldDC);
 }
 
 void PlayState::process_packet(const PacketHeader* packet)
@@ -149,6 +248,7 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 		move(bossView, packet.boss.x, packet.boss.y);
 	bossView.snapshot = packet.boss;
 	snapshotTick = packet.tick;
+	snapshotReceivedAt = GetTickCount64();
 	hasSnapshot = true;
 }
 
