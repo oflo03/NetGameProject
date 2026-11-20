@@ -29,6 +29,18 @@ namespace GameData
 	inline constexpr float RollMoveSeconds = 1.0f / 3.0f;
 	inline constexpr float RollSpeedMultiplier = 3.0f;
 
+	// Client/Weapon.h의 bullet_table과 layertype 값
+	enum BulletKind : std::uint8_t
+	{
+		BULLET_PISTOL, BULLET_RIFLE, BULLET_SHOTGUN, BULLET_ENEMY, BULLET_BOUNCE,
+		BULLET_BOSS_ORBIT, BULLET_BOSS_AIMED, BULLET_BOSS_RADIAL, BULLET_BOSS_REFLECTED,
+		BULLET_ROCKET
+	};
+	enum BulletSide : std::uint8_t
+	{
+		BULLET_SIDE_PLAYER = 4, BULLET_SIDE_ENEMY = 5
+	};
+
 	struct WeaponStats
 	{
 		float cooldownSeconds;

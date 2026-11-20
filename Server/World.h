@@ -26,9 +26,11 @@ private:
 	int stage = 0;
 	int phase = 0;
 	std::uint32_t tick = 0;
+	std::uint16_t nextBulletId = 0;
 	bool portalOpen = false;
 	Vector2D<float> portalPos;
 	std::vector<std::vector<char>> events;	// 이번 틱의 Protocol.h 이벤트 패킷 바이트
+	bool HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::array<bool, MAX_PLAYERS>& hitPlayers);
 
 public:
 	World();

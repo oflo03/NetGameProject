@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -72,6 +73,7 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 	events.clear();
 	stage = phase = 1;
 	tick = 0;
+	nextBulletId = 0;
 	portalOpen = false;
 	portalPos = {};
 	return true;
@@ -105,13 +107,64 @@ void World::UpdatePlayers(float deltaTime)
 
 Bullet* World::SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir)
 {
-	// [S10] World::SpawnBullet: 총알 ID 발급, 종류별 상태 설정, 총알 생성 이벤트 준비
+	// [S10] World::SpawnBullet: 활성 총알과 겹치지 않는 ID를 발급한다.
+	if (stage == 0 || type >= std::size(GameData::Bullets) ||
+		(side != GameData::BULLET_SIDE_PLAYER && side != GameData::BULLET_SIDE_ENEMY) ||
+		!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(dir.x) || !std::isfinite(dir.y))
+		return nullptr;
+	if (type != GameData::BULLET_BOSS_ORBIT && dir.x == 0 && dir.y == 0)
+		return nullptr;
+	for (std::uint32_t attempt = 0; attempt <= std::numeric_limits<std::uint16_t>::max(); ++attempt) {
+		const auto id = nextBulletId++;
+		if (std::any_of(bullets.begin(), bullets.end(), [id](const auto& bullet) {
+			return bullet->active && bullet->id == id;
+		}))
+			continue;
+		auto bullet = std::make_unique<Bullet>();
+		bullet->active = true;
+		bullet->id = id;
+		bullet->type = type;
+		bullet->side = side;
+		bullet->pos = bullet->lastPos = pos;
+		bullet->dir = dir;
+		bullet->orbitCenter = dir;
+		const auto& stats = GameData::Bullets[type];
+		bullet->damage = stats.damage;
+		bullet->radius = stats.radius;
+		bullet->speedPerSecond = stats.speedPerSecond;
+		auto* result = bullet.get();
+		bullets.push_back(std::move(bullet));
+		S2C_BULLET_SPAWN_PACKET packet{};
+		packet.type = S2C_BULLET_SPAWN;
+		packet.count = 1;
+		packet.size = static_cast<UINT16>(offsetof(S2C_BULLET_SPAWN_PACKET, bullets) + sizeof(BulletSpawn));
+		packet.bullets[0] = { id, type, side, pos.x, pos.y, dir.x, dir.y };
+		PushEvent(&packet, packet.size);
+		return result;
+	}
 	return nullptr;
 }
 
 void World::UpdateBullets(float deltaTime)
 {
-	// [S10] World::UpdateBullets: 총알 이동, 이동 구간을 나눠 벽 통과 방지
+	// [S10] World::UpdateBullets: 원작의 초당 속도로 직선·회전 이동한다.
+	for (auto& bullet : bullets) {
+		if (!bullet->active)
+			continue;
+		if (!bullet->firstUpdate)
+			bullet->lastPos = bullet->pos;
+		bullet->firstUpdate = false;
+		if (bullet->type == GameData::BULLET_BOSS_ORBIT) {
+			bullet->stepRotationDegrees = std::min(GameData::OrbitBulletDegreesPerSecond * deltaTime,
+				600.0f - bullet->rotationDegrees);
+			bullet->pos = (bullet->pos - bullet->orbitCenter).Rotate(bullet->stepRotationDegrees) + bullet->orbitCenter;
+			bullet->rotationDegrees += bullet->stepRotationDegrees;
+		} else {
+			const double length = std::hypot(static_cast<double>(bullet->dir.x), static_cast<double>(bullet->dir.y));
+			const Vector2D<float> direction(static_cast<float>(bullet->dir.x / length), static_cast<float>(bullet->dir.y / length));
+			bullet->pos += direction * (bullet->speedPerSecond * deltaTime);
+		}
+	}
 }
 
 void World::ResolveCollisions()
@@ -135,7 +188,101 @@ void World::ResolveCollisions()
 		}
 		player.pos = resolved;
 	}
+	// [S10] 총알 경로를 4픽셀 이하로 나눠 벽과 작은 대상을 검사한다.
+	for (auto& bullet : bullets) {
+		if (!bullet->active)
+			continue;
+		const bool orbit = bullet->type == GameData::BULLET_BOSS_ORBIT;
+		const auto movement = bullet->pos - bullet->lastPos;
+		const auto radiusVector = bullet->lastPos - bullet->orbitCenter;
+		const float distance = orbit ? std::hypot(radiusVector.x, radiusVector.y) *
+			bullet->stepRotationDegrees * static_cast<float>(M_PI / 180.0) : std::hypot(movement.x, movement.y);
+		const int steps = std::max(1, static_cast<int>(std::ceil(distance / 4.0f)));
+		std::array<bool, MAX_PLAYERS> hitPlayers{};
+		bool hit = false;
+		for (int step = 0; step <= steps; ++step) {
+			const float ratio = static_cast<float>(step) / steps;
+			auto position = bullet->lastPos + movement * ratio;
+			if (orbit) {
+				auto offset = radiusVector;
+				position = offset.Rotate(bullet->stepRotationDegrees * ratio) + bullet->orbitCenter;
+			}
+			if (!orbit && (position.x < 0 || position.y < 0 ||
+				position.x >= TileMap::Columns * TileMap::TileExtent || position.y >= TileMap::Rows * TileMap::TileExtent)) {
+				bullet->pos = position;
+				bullet->active = false;
+				break;
+			}
+			if (HitBulletTarget(*bullet, position, hitPlayers)) {
+				hit = true;
+				if (!orbit) {
+					bullet->pos = position;
+					bullet->active = false;
+					break;
+				}
+			}
+		}
+		if (orbit && bullet->rotationDegrees >= 600.0f)
+			bullet->active = false;
+		if (bullet->active)
+			continue;
+		if (hit && bullet->type == GameData::BULLET_ROCKET) {
+			const Vector2D<float> blastSize(GameData::RocketBlastRadius, GameData::RocketBlastRadius);
+			for (auto& enemy : enemies)
+				if (enemy->active && enemy->hp > 0 && CollisionCheck::CircleRect(bullet->pos, blastSize, enemy->pos, enemy->size))
+					DamageEnemy(*enemy, GameData::RocketBlastDamage);
+		}
+		S2C_BULLET_REMOVE_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.type = S2C_BULLET_REMOVE;
+		packet.id = bullet->id;
+		packet.hit = hit ? 1 : 0;
+		packet.x = bullet->pos.x;
+		packet.y = bullet->pos.y;
+		PushEvent(&packet, sizeof(packet));
+	}
+	std::erase_if(bullets, [](const auto& bullet) { return !bullet->active; });
+}
 
+bool World::HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::array<bool, MAX_PLAYERS>& hitPlayers)
+{
+	const Vector2D<float> size(bullet.radius, bullet.radius);
+	if (bullet.type != GameData::BULLET_BOSS_ORBIT)
+		for (const auto& tile : map.blockedTiles)
+			if (tile.type == TileMap::WallType && CollisionCheck::CircleRect(pos, size, tile.pos, tile.size))
+				return true;
+	if (bullet.side == GameData::BULLET_SIDE_PLAYER) {
+		for (auto& enemy : enemies) {
+			if (!enemy->active || enemy->hp <= 0)
+				continue;
+			const bool overlap = enemy->type == GameData::EnemyKind::Bat ?
+				CollisionCheck::CircleCircle(pos, size, enemy->pos, enemy->size) :
+				CollisionCheck::CircleRect(pos, size, enemy->pos, enemy->size);
+			if (overlap) {
+				DamageEnemy(*enemy, bullet.damage);
+				return true;
+			}
+		}
+		if (boss && boss->active && boss->hp > 0 &&
+			CollisionCheck::CircleCircle(pos, size, boss->pos, { boss->radius, boss->radius })) {
+			boss->hp = static_cast<std::int16_t>(std::max(0, boss->hp - bullet.damage));
+			return true;
+		}
+		return false;
+	}
+	bool hit = false;
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		auto& player = players[id];
+		if (hitPlayers[id] || !player.used || player.hp <= 0 || player.rollTime > 0 || player.invulnerableTime > 0)
+			continue;
+		if (CollisionCheck::RectCircle(player.pos, player.size, pos, size)) {
+			DamagePlayer(player, bullet.damage);
+			hitPlayers[id] = hit = true;
+			if (bullet.type != GameData::BULLET_BOSS_ORBIT)
+				break;
+		}
+	}
+	return hit;
 }
 
 void World::SwordSlash(ServerPlayer& player)
