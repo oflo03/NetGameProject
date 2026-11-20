@@ -88,6 +88,10 @@ void World::Tick(float deltaTime)
 	UpdatePlayers(deltaTime);
 	UpdateBullets(deltaTime);
 	ResolveCollisions();
+	// [S10] 벽에 막힌 최종 위치에서 발사하고 다음 틱부터 총알을 이동한다.
+	for (auto& player : players)
+		if (player.used && player.attackRequested)
+			player.TryFire(*this);
 	UpdateEnemies(deltaTime);
 	if (boss && boss->active)
 		boss->Update(deltaTime, *this);

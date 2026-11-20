@@ -34,7 +34,7 @@ namespace GameData
 	{
 		BULLET_PISTOL, BULLET_RIFLE, BULLET_SHOTGUN, BULLET_ENEMY, BULLET_BOUNCE,
 		BULLET_BOSS_ORBIT, BULLET_BOSS_AIMED, BULLET_BOSS_RADIAL, BULLET_BOSS_REFLECTED,
-		BULLET_ROCKET
+		BULLET_ROCKET, BULLET_NONE = 255
 	};
 	enum BulletSide : std::uint8_t
 	{
@@ -47,16 +47,18 @@ namespace GameData
 		int maxAmmo;
 		int projectileCount;
 		int halfSpreadDegrees;
+		BulletKind bulletType;
 	};
 
 	// Client/Weapon.h의 ID 순서. 샷건은 -10도부터 +10도까지 등간격 발사.
 	inline constexpr WeaponStats Weapons[] = {
-		{ 30 / OriginalUpdatesPerSecond, 1, 0, 0 },	// SWORD
-		{ 15 / OriginalUpdatesPerSecond, 20, 1, 5 },	// PISTOL
-		{ 7 / OriginalUpdatesPerSecond, 35, 1, 7 },	// RIFLE
-		{ 30 / OriginalUpdatesPerSecond, 10, 5, 10 },	// SHOTGUN
-		{ 10 / OriginalUpdatesPerSecond, 2, 1, 0 },	// ROCKET
+		{ 30 / OriginalUpdatesPerSecond, 1, 0, 0, BULLET_NONE },	// SWORD
+		{ 15 / OriginalUpdatesPerSecond, 20, 1, 5, BULLET_PISTOL },	// PISTOL
+		{ 7 / OriginalUpdatesPerSecond, 35, 1, 7, BULLET_RIFLE },	// RIFLE
+		{ 30 / OriginalUpdatesPerSecond, 10, 5, 10, BULLET_SHOTGUN },	// SHOTGUN
+		{ 10 / OriginalUpdatesPerSecond, 2, 1, 0, BULLET_ROCKET },	// ROCKET
 	};
+	inline constexpr float WeaponSwitchLeadSeconds = 3 / OriginalUpdatesPerSecond;
 	inline constexpr int SwordDamage = 10;
 	inline constexpr float SwordRange = 110.0f;
 	inline constexpr float SwordHalfAngleDegrees = 60.0f;

@@ -29,6 +29,7 @@ public:
 	float rollTime = 0;
 	float invulnerableTime = 0;
 	bool interactRequested = false;
+	bool attackRequested = false;	// 벽 충돌 보정 후 발사
 
 	void ApplyInput(const InputState& input, float deltaTime, World& world);
 	bool TryFire(World& world);
