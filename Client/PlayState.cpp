@@ -2,6 +2,9 @@
 #include "GameData.h"
 #include "Map.h"
 #include "NetworkManager.h"
+#include "Sound.h"
+#include "UI.h"
+#include "Weapon.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -12,6 +15,11 @@ namespace {
 	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
 	constexpr int worldWidth = MapWidth * PTS;
 	constexpr int worldHeight = MapHeight * PTS;
+
+	bool IsEffectPosition(float x, float y)
+	{
+		return x >= -PTS && x <= worldWidth + PTS && y >= -PTS && y <= worldHeight + PTS;
+	}
 }
 
 PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
@@ -23,6 +31,13 @@ PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
 
 void PlayState::update()
 {
+	for (auto& bullet : bulletViews)
+		bullet.second.update();
+	for (auto& effect : effects)
+		effect.update();
+	std::erase_if(effects, [](const Effect& effect) { return effect.time >= Effect::effect[effect.type].frame; });
+	SoundManager::getInstance()->update();
+
 	if (!hasSnapshot)
 		return;
 
@@ -41,6 +56,9 @@ void PlayState::update()
 		view.update();
 	}
 	UpdateCamera();
+	for (const auto& event : playerEvents)
+		OnPlayerEvent(event);
+	playerEvents.clear();
 }
 
 void PlayState::UpdateCamera()
@@ -100,6 +118,10 @@ void PlayState::draw()
 	});
 	for (auto it = visible.begin(); it != end; ++it)
 		(*it)->draw(worldDC);
+	for (auto& bullet : bulletViews)
+		bullet.second.draw(worldDC);
+	for (auto& effect : effects)
+		effect.Draw(worldDC);
 
 	// 카메라가 맵 바깥을 보는 부분은 검은색으로 둠
 	const float left = camPos.x - camSize.x;
@@ -122,6 +144,13 @@ void PlayState::draw()
 	SelectObject(worldDC, previousBitmap);
 	DeleteObject(worldBitmap);
 	DeleteDC(worldDC);
+
+	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS && playerViews[localPlayerId].snapshot.used)
+		UI::getInstance()->draw(mDC, playerViews[localPlayerId].snapshot);
+	const HWND window = GetActiveWindow();
+	POINT point = mPoint;
+	if (window && ScreenToClient(window, &point) && !cursor.IsNull())
+		cursor.Draw(mDC, point.x - 20, point.y - 30, 40, 40);
 }
 
 void PlayState::process_packet(const PacketHeader* packet)
@@ -178,6 +207,9 @@ void PlayState::process_packet(const PacketHeader* packet)
 			playerViews = {};
 			enemyViews.clear();
 			bossView = {};
+			bulletViews.clear();
+			effects.clear();
+			playerEvents.clear();
 			hasSnapshot = false;
 			dispatch(&PlayState::OnStageLoad);
 		}
@@ -254,12 +286,52 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 
 void PlayState::OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet)
 {
-	// [C6] OnBulletSpawn: 총알 생성 연출
+	constexpr int shotSounds[] = { PISTOL_SHOT, RIFLE_SHOT, SHOTGUN_SHOT };
+	bool played[BROCKET + 1]{};
+	for (int i = 0; i < packet.count; ++i) {
+		const auto& spawn = packet.bullets[i];
+		if (spawn.type >= std::size(GameData::Bullets) ||
+			(spawn.side != playerBullet && spawn.side != enemyBullet) ||
+			!IsEffectPosition(spawn.x, spawn.y) || !std::isfinite(spawn.dirX) || !std::isfinite(spawn.dirY))
+			continue;
+
+		Vector2D<float> direction(spawn.dirX, spawn.dirY);
+		if (spawn.type != BOSSBULLET1) {
+			const double length = std::hypot(static_cast<double>(spawn.dirX), static_cast<double>(spawn.dirY));
+			if (length == 0)
+				continue;
+			direction = { static_cast<float>(spawn.dirX / length), static_cast<float>(spawn.dirY / length) };
+		} else if (!IsEffectPosition(spawn.dirX, spawn.dirY)) {
+			continue;
+		}
+		auto [it, inserted] = bulletViews.try_emplace(spawn.id);
+		if (!inserted)
+			continue;
+		it->second.spawn = spawn;
+		it->second.position = { spawn.x, spawn.y };
+		it->second.direction = direction;
+		if (!played[spawn.type] && spawn.side == playerBullet) {
+			if (spawn.type <= BSHOTGUN)
+				SoundManager::getInstance()->play(shotSounds[spawn.type]);
+			else if (spawn.type == BROCKET)
+				SoundManager::getInstance()->play(ROCKET_SHOT);
+			played[spawn.type] = true;
+		}
+	}
 }
 
 void PlayState::OnBulletRemove(const S2C_BULLET_REMOVE_PACKET& packet)
 {
-	// [C6] OnBulletRemove: 총알 제거와 피격 연출
+	const auto it = bulletViews.find(packet.id);
+	if (it == bulletViews.end())
+		return;
+	const UINT8 type = it->second.spawn.type;
+	bulletViews.erase(it);
+	if (!packet.hit)
+		return;
+	constexpr CEffect hits[] = { PISTOLBULLET, RIFLEBULLET, SHOTGUNBULLET, ENEMYBULLET, BOUNCEBULLET,
+		PATTERNA, PATTERNB, PATTERNA, PATTERNB, EXPLOSION };
+	AddEffect(hits[type], { packet.x, packet.y });
 }
 
 void PlayState::OnEnemySpawn(const S2C_ENEMY_SPAWN_PACKET& packet)
@@ -274,7 +346,46 @@ void PlayState::OnEnemyDead(const S2C_ENEMY_DEAD_PACKET& packet)
 
 void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 {
-	// [C6] OnPlayerEvent: 플레이어 이벤트 연출
+	if (packet.playerId >= MAX_PLAYERS || packet.event > PE_REVIVE)
+		return;
+	if (!hasSnapshot) {
+		playerEvents.push_back(packet);
+		return;
+	}
+	const auto& view = playerViews[packet.playerId];
+	if (!view.hasPosition)
+		return;
+	const auto position = view.currentPosition;
+	auto* sound = SoundManager::getInstance();
+	switch (packet.event) {
+	case PE_HIT:
+		AddEffect(DAMAGED, position);
+		sound->play(PLAYER_HURT);
+		break;
+	case PE_DEAD:
+		sound->play(PLAYER_DEATH);
+		break;
+	case PE_SWORD:
+		AddEffect(SWORDATTACK, position);
+		sound->play(SWORD_ATK);
+		break;
+	case PE_PICKUP:
+		sound->play(CURSORON);
+		break;
+	case PE_REVIVE:
+		AddEffect(TELEPORT, position);
+		break;
+	default:
+		break;
+	}
+}
+
+void PlayState::AddEffect(CEffect type, Vector2D<float> position)
+{
+	if (!IsEffectPosition(position.x, position.y))
+		return;
+	EffectManager::getInstance();
+	effects.emplace_back(type, position);
 }
 
 void PlayState::OnDrop(const S2C_DROP_PACKET& packet)

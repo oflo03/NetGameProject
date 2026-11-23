@@ -56,9 +56,12 @@ public:
 
 class BulletView
 {
+	friend class PlayState;
 private:
 	BulletSpawn spawn{};
 	Vector2D<float> position{};
+	Vector2D<float> direction{};
+	float age = 0.0f;
 
 public:
 	void update();

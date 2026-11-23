@@ -1,4 +1,6 @@
 #include "EntityView.h"
+#include "GameData.h"
+#include "Map.h"
 #include "Weapon.h"
 #include <algorithm>
 #include <cmath>
@@ -37,6 +39,25 @@ namespace {
 		static PlayerSprites marin(CHAR_MARIN);
 		return marin;
 	}
+
+	struct BulletSprites
+	{
+		Animation sheets[BROCKET + 1]{};
+
+		BulletSprites()
+		{
+			LoadAnimation(sheets[BPISTOL], L"resources/Bullet_Pistol.png", 4, 3);
+			LoadAnimation(sheets[BRIFLE], L"resources/Bullet_Rifle.png", 4, 3);
+			LoadAnimation(sheets[BSHOTGUN], L"resources/Bullet_Shotgun.png", 4, 3);
+			LoadAnimation(sheets[BENEMY], L"resources/enemy_bullet3.png", 4, 3);
+			LoadAnimation(sheets[BBOUNCE], L"resources/bounced_bullet.png", 4, 3);
+			LoadAnimation(sheets[BOSSBULLET1], L"resources/boss_bullet1.png", 4, 3);
+			LoadAnimation(sheets[BOSSBULLET2], L"resources/boss_bullet2.png", 1, 0);
+			LoadAnimation(sheets[BOSSBULLET3], L"resources/boss_bullet3.png", 4, 2);
+			LoadAnimation(sheets[BOUNCEDBOSSBULLET2], L"resources/boss_bullet2_bounced.png", 1, 0);
+			LoadAnimation(sheets[BROCKET], L"resources/Bullet_Rocket.png", 5, 3);
+		}
+	};
 }
 
 Vector2D<float> EntityView::Interpolate(float alpha) const
@@ -154,12 +175,55 @@ void BossView::draw(HDC dc)
 
 void BulletView::update()
 {
-	// [C6] update: 서버와 같은 공식으로 총알 이동 재현
+	age += static_cast<float>(frame_time);
+	const Vector2D<float> start(spawn.x, spawn.y);
+	if (spawn.type == BOSSBULLET1) {
+		const float degrees = (std::min)(GameData::OrbitBulletDegreesPerSecond * age, 600.0f);
+		position = (start - direction).Rotate(degrees) + direction;
+	} else {
+		position = start + direction * (GameData::Bullets[spawn.type].speedPerSecond * age);
+	}
 }
 
 void BulletView::draw(HDC dc)
 {
-	// [C9] draw: 총알 그리기
+	if (!(position.x >= -PTS && position.x <= MapWidth * PTS + PTS &&
+		position.y >= -PTS && position.y <= MapHeight * PTS + PTS))
+		return;
+	static BulletSprites sprites;
+	auto& anim = sprites.sheets[spawn.type];
+	if (anim.resource.IsNull())
+		return;
+	const int width = anim.size.right;
+	const int height = anim.size.bottom;
+	const int frame = static_cast<int>(std::fmod(age * anim.velocity * anim.frame, anim.frame));
+	const int x = static_cast<int>(position.x);
+	const int y = static_cast<int>(position.y);
+	if (spawn.type == BOSSBULLET1 || spawn.type == BOSSBULLET3) {
+		anim.resource.Draw(dc, x - width, y - height, width * 2, height * 2,
+			frame * width, 0, width, height);
+		return;
+	}
+
+	CImage rotated;
+	if (!rotated.Create(width, height, 32))
+		return;
+	for (int py = 0; py < height; ++py) {
+		for (int px = 0; px < width; ++px) {
+			const float dx = px - width * 0.5f;
+			const float dy = py - height * 0.5f;
+			const float sx = dx * direction.x + dy * direction.y + width * 0.5f;
+			const float sy = dy * direction.x - dx * direction.y + height * 0.5f;
+			auto* pixel = static_cast<DWORD*>(rotated.GetPixelAddress(px, py));
+			*pixel = 0;
+			if (sx >= 0 && sx < width && sy >= 0 && sy < height) {
+				const auto* source = static_cast<const DWORD*>(anim.resource.GetPixelAddress(
+					frame * width + static_cast<int>(sx), static_cast<int>(sy)));
+				*pixel = *source;
+			}
+		}
+	}
+	rotated.TransparentBlt(dc, x - width / 2, y - height / 2, width, height, RGB(0, 0, 0));
 }
 
 void DropView::draw(HDC dc)

@@ -2,6 +2,9 @@
 #include "Player.h"
 #include "Boss.h"
 #include "Map.h"
+#include "GameData.h"
+#include "Protocol.h"
+#include <algorithm>
 
 #define HeartSize 90
 
@@ -14,7 +17,6 @@ UI::UI()
 	bossHp.Load(L"resources/boss_hp.png");
 	bossHpFrame.Load(L"resources/boss_hp_frame.png");
 	bossHpFrame2.Load(L"resources/boss_hp_frame2.png");
-	pp = Player::getInstance();
 	ammoTextBox = RECT(monitorSize.x - 250, 170, monitorSize.x - 10, 200);
 	romulus = CreateFont(48, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
 		OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
@@ -42,6 +44,7 @@ void UI::release()
 
 void UI::draw(HDC mDC)
 {
+	auto* pp = Player::getInstance();
 	int hp = pp->GetHP();
 	for (int i = 0; i < hp / 2; ++i)
 		heart.Draw(mDC, 10 + i * HeartSize, 10, HeartSize, HeartSize, 0, 0, 15, 15);
@@ -75,4 +78,53 @@ void UI::draw(HDC mDC)
 		}
 	}
 	cursor.Draw(mDC, mPoint.x - 20, mPoint.y - 30, 40, 40);
+}
+
+void UI::draw(HDC mDC, const PlayerSnap& player)
+{
+	const int width = screen.right - screen.left;
+	const int size = (std::min)(HeartSize, width / 14);
+	if (!player.used || size <= 0)
+		return;
+
+	const int hp = (std::min)(static_cast<int>(player.hp), GameData::Players[CHAR_MARIN].hp);
+	for (int i = 0; i < (hp + 1) / 2; ++i) {
+		const int sourceX = hp - i * 2 == 1 ? 15 : 0;
+		heart.Draw(mDC, screen.left + 10 + i * size, screen.top + 10,
+			size, size, sourceX, 0, 15, 15);
+	}
+	if (player.weapon >= WEAPON_COUNT)
+		return;
+
+	const int iconWidth = (std::min)(240, width / 4);
+	const int iconHeight = iconWidth * 2 / 3;
+	const int right = screen.right - 10;
+	const int x = right - iconWidth;
+	const int y = screen.top + 10;
+	weapons.Draw(mDC, x, y, iconWidth, iconHeight, 0, 0, 48, 32);
+	weapons.Draw(mDC, x, y, iconWidth, iconHeight, 48 + player.weapon * 48, 0, 48, 32);
+
+	wchar_t ammo[16]{};
+	if (player.weapon == WEAPON_SWORD)
+		wcscpy_s(ammo, L"∞ / ∞");
+	else
+		swprintf_s(ammo, L"%d / %d", player.ammo[player.weapon], GameData::Weapons[player.weapon].maxAmmo);
+	const int saved = SaveDC(mDC);
+	SelectObject(mDC, romulus);
+	SetBkMode(mDC, TRANSPARENT);
+	SetTextColor(mDC, RGB(255, 255, 255));
+	RECT label{ x, y + iconHeight, right, y + iconHeight + 40 };
+	DrawTextW(mDC, ammo, -1, &label, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+	RestoreDC(mDC, saved);
+
+	const int smallWidth = iconWidth * 7 / 12;
+	const int smallHeight = smallWidth * 2 / 3;
+	int rowY = label.bottom;
+	for (int i = WEAPON_PISTOL; i < WEAPON_COUNT; ++i) {
+		if (i == player.weapon || player.ammo[i] == 0)
+			continue;
+		weapons.Draw(mDC, right - smallWidth, rowY, smallWidth, smallHeight,
+			48 + i * 48, 0, 48, 32);
+		rowY += smallHeight;
+	}
 }
