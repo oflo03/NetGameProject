@@ -62,6 +62,8 @@ namespace GameData
 	inline constexpr int SwordDamage = 10;
 	inline constexpr float SwordRange = 110.0f;
 	inline constexpr float SwordHalfAngleDegrees = 60.0f;
+	inline constexpr float SwordWindupSeconds = 4.0f / (4.0f * 8.0f);
+	inline constexpr float PlayerInvulnerableSeconds = 1.0f;
 	inline constexpr float RocketBlastRadius = 100.0f;
 	inline constexpr int RocketBlastDamage = 20;
 

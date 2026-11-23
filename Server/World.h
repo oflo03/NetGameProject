@@ -44,7 +44,7 @@ public:
 	void SwordSlash(ServerPlayer& player);
 	void DamagePlayer(ServerPlayer& player, int damage);
 	void UpdateEnemies(float deltaTime);
-	ServerPlayer* FindNearestPlayer(const Vector2D<float>& pos) const;
+	const ServerPlayer* FindNearestPlayer(const Vector2D<float>& pos) const;
 	void DamageEnemy(ServerEnemy& enemy, int damage);
 	void SpawnWave();
 	void UpdateStage();

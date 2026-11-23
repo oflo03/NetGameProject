@@ -20,6 +20,7 @@ void ServerPlayer::ApplyInput(const InputState& input, float deltaTime, World& w
 	}
 	fireCooldown = (std::max)(0.0f, fireCooldown - deltaTime);
 	invulnerableTime = (std::max)(0.0f, invulnerableTime - deltaTime);
+	swordTime = (std::max)(0.0f, swordTime - deltaTime);
 	interactRequested = input.interact;
 	if (std::isfinite(input.aimX) && std::isfinite(input.aimY)) {
 		aimPos = Vector2D<float>(input.aimX, input.aimY);
@@ -79,7 +80,9 @@ bool ServerPlayer::TryFire(World& world)
 		return false;
 	const auto& stats = GameData::Weapons[weapon];
 	if (weapon == WEAPON_SWORD) {
-		world.SwordSlash(*this);
+		swordPending = true;
+		swordTime = GameData::SwordWindupSeconds;
+		swordAngle = angle;
 		S2C_PLAYER_EVENT_PACKET packet{};
 		packet.size = sizeof(packet);
 		packet.type = S2C_PLAYER_EVENT;

@@ -26,6 +26,21 @@ namespace
 				return true;
 		return false;
 	}
+
+	bool InSwordArc(Vector2D<float> center, float angle, Vector2D<float> pos, Vector2D<float> size)
+	{
+		const float radians = angle * static_cast<float>(M_PI / 180.0);
+		const Vector2D<float> forward(std::cos(radians), std::sin(radians));
+		const float limit = std::cos(GameData::SwordHalfAngleDegrees * static_cast<float>(M_PI / 180.0));
+		for (float x : { -size.x, size.x })
+			for (float y : { -size.y, size.y }) {
+				const auto offset = pos + Vector2D<float>(x, y) - center;
+				const float distance = std::hypot(offset.x, offset.y);
+				if (distance <= GameData::SwordRange && forward.Dot(offset) >= distance * limit)
+					return true;
+			}
+		return false;
+	}
 }
 
 World::World() = default;
@@ -88,6 +103,9 @@ void World::Tick(float deltaTime)
 	UpdatePlayers(deltaTime);
 	UpdateBullets(deltaTime);
 	ResolveCollisions();
+	for (auto& player : players)
+		if (player.used && player.swordPending && player.swordTime <= 0)
+			SwordSlash(player);
 	// [S10] 벽에 막힌 최종 위치에서 발사하고 다음 틱부터 총알을 이동한다.
 	for (auto& player : players)
 		if (player.used && player.attackRequested)
@@ -291,12 +309,73 @@ bool World::HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::arra
 
 void World::SwordSlash(ServerPlayer& player)
 {
-	// [S10] World::SwordSlash: 칼 공격 범위 판정, 기사 총알 반사
+	// [S10] World::SwordSlash: 원작처럼 대상의 모서리로 부채꼴 범위를 검사한다.
+	player.swordPending = false;
+	if (!player.used || player.hp <= 0)
+		return;
+	const auto center = player.pos + Vector2D<float>(std::abs(player.swordAngle) < 90 ? 18.0f : -17.0f, 8.0f);
+	for (auto& enemy : enemies)
+		if (enemy->active && enemy->hp > 0 && enemy->spawnTime <= 0 &&
+			InSwordArc(center, player.swordAngle, enemy->pos, enemy->size))
+			DamageEnemy(*enemy, GameData::SwordDamage);
+	if (boss && boss->active && boss->hp > 0 &&
+		InSwordArc(center, player.swordAngle, boss->pos, { boss->radius, boss->radius }))
+		boss->hp = static_cast<std::int16_t>(std::max(0, boss->hp - GameData::SwordDamage));
+	for (auto& bullet : bullets) {
+		if (!bullet->active || bullet->side != GameData::BULLET_SIDE_ENEMY ||
+			bullet->type == GameData::BULLET_BOSS_ORBIT || bullet->type == GameData::BULLET_BOSS_RADIAL ||
+			!InSwordArc(center, player.swordAngle, bullet->pos, { bullet->radius, bullet->radius }))
+			continue;
+		S2C_BULLET_REMOVE_PACKET removed{};
+		removed.size = sizeof(removed);
+		removed.type = S2C_BULLET_REMOVE;
+		removed.id = bullet->id;
+		removed.x = bullet->pos.x;
+		removed.y = bullet->pos.y;
+		PushEvent(&removed, sizeof(removed));
+		if (player.charType != CHAR_KNIGHT) {
+			bullet->active = false;
+			continue;
+		}
+		// 반사는 같은 ID의 제거·생성을 보내 클라이언트 방향도 교체한다.
+		const auto aim = player.aimPos - center;
+		const float length = std::hypot(aim.x, aim.y);
+		const float radians = player.swordAngle * static_cast<float>(M_PI / 180.0);
+		bullet->dir = (length > 0 ? aim / length : Vector2D<float>(std::cos(radians), std::sin(radians))) * 10.0f;
+		bullet->type = bullet->type == GameData::BULLET_BOSS_AIMED ? GameData::BULLET_BOSS_REFLECTED : GameData::BULLET_BOUNCE;
+		bullet->side = GameData::BULLET_SIDE_PLAYER;
+		bullet->speedPerSecond = GameData::Bullets[bullet->type].speedPerSecond;
+		bullet->lastPos = bullet->pos;
+		bullet->firstUpdate = false;
+		S2C_BULLET_SPAWN_PACKET spawn{};
+		spawn.type = S2C_BULLET_SPAWN;
+		spawn.count = 1;
+		spawn.size = static_cast<UINT16>(offsetof(S2C_BULLET_SPAWN_PACKET, bullets) + sizeof(BulletSpawn));
+		spawn.bullets[0] = { bullet->id, bullet->type, bullet->side, bullet->pos.x, bullet->pos.y, bullet->dir.x, bullet->dir.y };
+		PushEvent(&spawn, spawn.size);
+	}
+	std::erase_if(bullets, [](const auto& bullet) { return !bullet->active; });
 }
 
 void World::DamagePlayer(ServerPlayer& player, int damage)
 {
-	// [S10] World::DamagePlayer: 플레이어 피격, 사망 처리
+	// [S10] World::DamagePlayer: 원작 체력은 피해량과 관계없이 한 칸씩 감소한다.
+	if (!player.used || player.hp <= 0 || damage <= 0 || player.rollTime > 0 || player.invulnerableTime > 0)
+		return;
+	--player.hp;
+	player.state = player.hp > 0 ? GameData::PLAYER_DAMAGED : GameData::PLAYER_DEAD;
+	player.invulnerableTime = player.hp > 0 ? GameData::PlayerInvulnerableSeconds : 0;
+	if (player.hp == 0) {
+		player.attackRequested = player.interactRequested = player.swordPending = false;
+		player.rollTime = 0;
+	}
+	S2C_PLAYER_EVENT_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_PLAYER_EVENT;
+	packet.playerId = player.playerId;
+	packet.event = player.hp > 0 ? PE_HIT : PE_DEAD;
+	packet.value = static_cast<UINT8>(player.hp);
+	PushEvent(&packet, sizeof(packet));
 }
 
 void World::UpdateEnemies(float deltaTime)
@@ -304,10 +383,23 @@ void World::UpdateEnemies(float deltaTime)
 	// [S11] World::UpdateEnemies: 적 타깃 선택, Behavior Tree 실행, 이동
 }
 
-ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
+const ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
 {
-	// [S11] World::FindNearestPlayer: 가장 가까운 생존 플레이어 찾기
-	return nullptr;
+	// [S11] World::FindNearestPlayer: 거리 제곱으로 생존 플레이어를 고른다.
+	const ServerPlayer* nearest = nullptr;
+	double nearestDistance = std::numeric_limits<double>::max();
+	for (const auto& player : players) {
+		if (!player.used || player.hp <= 0)
+			continue;
+		const double x = static_cast<double>(player.pos.x) - pos.x;
+		const double y = static_cast<double>(player.pos.y) - pos.y;
+		const double distance = x * x + y * y;
+		if (distance < nearestDistance) {
+			nearestDistance = distance;
+			nearest = &player;
+		}
+	}
+	return nearest;
 }
 
 void World::DamageEnemy(ServerEnemy& enemy, int damage)
