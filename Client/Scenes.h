@@ -8,6 +8,8 @@
 class Boss;
 class Player;
 
+HFONT MakeFont(int height, const wchar_t* face);
+
 class LogoState : public GameState
 {
 private:
@@ -28,8 +30,9 @@ private:
 	TCHAR string1[10];
 	TCHAR string2[10];
 	TCHAR string3[10];
-	RECT rect[3];
-	bool isOn[3];
+	TCHAR string4[10];
+	RECT rect[4];
+	bool isOn[4];
 public:
 	MenuState();
 	~MenuState();

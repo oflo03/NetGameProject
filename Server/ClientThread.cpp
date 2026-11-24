@@ -1,31 +1,83 @@
 #include "ClientThread.h"
+#include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cwchar>
 
 // ---- S3 로그인 처리 ----
 
 void HandleLogin(Session* s, const C2S_LOGIN_PACKET* packet)
 {
-	// [S3] HandleLogin: 이미 로그인한 세션이면 무시, name 끝을 널 문자로 막음
-	// room.lock을 잡고 게임 중 → 인원 → 닉네임 중복 순서로 확인, 통과하면 빈 playerId 발급 (첫 로그인이면 방장)
-	// 락을 푼 뒤 SendLoginResult, 성공이면 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_LOGIN_PACKET))
+		return;	// 크기가 다르면 연결 종료는 11/27 작업, 여기서는 읽지 않고 무시
+	wchar_t name[NAME_LEN];
+	std::memcpy(name, packet->name, sizeof(name));
+	name[NAME_LEN - 1] = L'\0';	// 클라가 널 문자를 안 넣어 보내도 끝을 막음
+	if (name[0] == L'\0')
+		return;
+
+	LoginResult result = LOGIN_OK;
+	int playerId = -1;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId >= 0)
+			return;	// 이미 로그인한 세션
+		// [S3] 게임 진행 중 거절(LOGIN_IN_GAME)은 11/27 작업
+		if (CountLoggedIn() >= MAX_PLAYERS)
+			result = LOGIN_FULL;
+		else if (IsNameTaken(name))
+			result = LOGIN_NAME_TAKEN;
+		else {
+			// 비어 있는 가장 작은 playerId 발급
+			bool taken[MAX_PLAYERS] = {};
+			for (const Session& other : room.sessions)
+				if (other.used && other.playerId >= 0)
+					taken[other.playerId] = true;
+			playerId = 0;
+			while (taken[playerId])
+				++playerId;
+
+			s->playerId = playerId;
+			std::memcpy(s->name, name, sizeof(name));
+			s->charType = CHAR_MARIN;
+			s->ready = READY_NO;
+			if (room.hostId < 0)
+				room.hostId = playerId;	// 첫 로그인이면 방장
+		}
+	}
+
+	SendLoginResult(s, result, playerId < 0 ? 0 : (UINT8)playerId);
+	if (result == LOGIN_OK) {
+		printf("로그인 (슬롯 %d, 플레이어 %d)\n", int(s - room.sessions), playerId);
+		BroadcastRoomInfo();
+	}
 }
 
 bool IsNameTaken(const wchar_t* name)
 {
-	// [S3] IsNameTaken: 로그인한 세션 중 같은 닉네임이 있는지 확인
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0 && std::wcscmp(s.name, name) == 0)
+			return true;
 	return false;
 }
 
 int CountLoggedIn()
 {
-	// [S3] CountLoggedIn: 로그인한 세션 수 (playerId >= 0)
-	return 0;
+	int count = 0;
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0)
+			++count;
+	return count;
 }
 
 void SendLoginResult(Session* s, LoginResult result, UINT8 playerId)
 {
-	// [S3] SendLoginResult: S2C_LOGIN_RESULT를 EnqueueSend
+	S2C_LOGIN_RESULT_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_LOGIN_RESULT;
+	packet.result = result;
+	packet.playerId = playerId;
+	EnqueueSend(s, &packet, sizeof(packet));
 }
 
 // ---- S4 대기실 처리 ----

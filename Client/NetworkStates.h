@@ -4,13 +4,15 @@
 #include "Protocol.h"
 #include <string>
 
-// 네트워크 화면 틀. 기존 게임 흐름에는 아직 연결하지 않음
+// 네트워크 화면: 메뉴 ONLINE → ConnectState → LoginState → LobbyState → PlayState
 
 class ConnectState : public GameState
 {
 private:
+	CImage background;
 	std::string serverIp;
 	std::wstring message;
+	bool connecting = false;
 public:
 	ConnectState();
 	void on_char(wchar_t ch) override;
@@ -22,8 +24,10 @@ public:
 class LoginState : public GameState
 {
 private:
+	CImage background;
 	wchar_t nickname[NAME_LEN] = {};
 	std::wstring message;
+	bool waiting = false;	// 로그인 결과를 기다리는 중
 public:
 	LoginState();
 	void on_char(wchar_t ch) override;

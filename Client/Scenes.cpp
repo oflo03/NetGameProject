@@ -5,8 +5,9 @@
 #include "Map.h"
 #include "Effect.h"
 #include "Sound.h"
+#include "NetworkStates.h"
 
-static HFONT MakeFont(int height, const wchar_t* face)
+HFONT MakeFont(int height, const wchar_t* face)
 {
 	return CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
 		OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
@@ -62,14 +63,15 @@ void LogoState::draw()
 
 // ---- MenuState ----
 
-MenuState::MenuState() : string1(L"PLAY"), string2(L"OPTIONS"), string3(L"QUIT")
+MenuState::MenuState() : string1(L"PLAY"), string2(L"ONLINE"), string3(L"OPTIONS"), string4(L"QUIT")
 {
 	title.Load(L"resources/main_title.png");
 	font = MakeFont(60, L"Romulus");
 	rect[0] = { 20,610,180,670 };
 	rect[1] = { 20,690,220,750 };
-	rect[2] = { 20,770,160,830 };
-	for (int i = 0; i < 3; i++)
+	rect[2] = { 20,770,220,830 };
+	rect[3] = { 20,850,160,910 };
+	for (int i = 0; i < 4; i++)
 		isOn[i] = false;
 	SoundManager::getInstance()->play(TitleState);
 }
@@ -83,7 +85,7 @@ MenuState::~MenuState()
 void MenuState::update()
 {
 	SoundManager::getInstance()->update();
-	for (int i = 0; i < 3; i++) {
+	for (int i = 0; i < 4; i++) {
 		if (PtInRect(&rect[i], mPoint)) {
 			if (!isOn[i])
 				SoundManager::getInstance()->play(CURSORON);
@@ -102,9 +104,13 @@ void MenuState::handle_events()
 		}
 		else if (isOn[1]) {
 			SoundManager::getInstance()->play(BUTTONCLICK);
-			push_state(new OptionState);
+			change_state(new ConnectState);
 		}
 		else if (isOn[2]) {
+			SoundManager::getInstance()->play(BUTTONCLICK);
+			push_state(new OptionState);
+		}
+		else if (isOn[3]) {
 			SoundManager::getInstance()->play(BUTTONCLICK);
 			PostQuitMessage(0);
 			return;
@@ -120,9 +126,11 @@ void MenuState::draw()
 	SetTextColor(mDC, isOn[0] ? RGB(255, 186, 0) : RGB(255, 255, 255));
 	DrawText(mDC, string1, 5, &rect[0], DT_VCENTER | DT_SINGLELINE);
 	SetTextColor(mDC, isOn[1] ? RGB(255, 186, 0) : RGB(255, 255, 255));
-	DrawText(mDC, string2, 8, &rect[1], DT_VCENTER | DT_SINGLELINE);
+	DrawText(mDC, string2, -1, &rect[1], DT_VCENTER | DT_SINGLELINE);
 	SetTextColor(mDC, isOn[2] ? RGB(255, 186, 0) : RGB(255, 255, 255));
-	DrawText(mDC, string3, 9, &rect[2], DT_VCENTER | DT_SINGLELINE);
+	DrawText(mDC, string3, -1, &rect[2], DT_VCENTER | DT_SINGLELINE);
+	SetTextColor(mDC, isOn[3] ? RGB(255, 186, 0) : RGB(255, 255, 255));
+	DrawText(mDC, string4, -1, &rect[3], DT_VCENTER | DT_SINGLELINE);
 	cursor.Draw(mDC, mPoint.x - 20, mPoint.y - 30, 40, 40);
 }
 
