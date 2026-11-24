@@ -84,24 +84,63 @@ void SendLoginResult(Session* s, LoginResult result, UINT8 playerId)
 
 void HandleSelectChar(Session* s, const C2S_SELECT_CHAR_PACKET* packet)
 {
-	// [S4] HandleSelectChar: room.lock을 잡고 로그인 전이거나 게임 중이거나 charType이 CHAR_MARIN·CHAR_KNIGHT가 아니면 무시, charType 갱신
-	// 락을 푼 뒤 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_SELECT_CHAR_PACKET) ||
+		(packet->charType != CHAR_MARIN && packet->charType != CHAR_KNIGHT))
+		return;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId < 0 || room.state == ROOM_IN_GAME)
+			return;
+		s->charType = packet->charType;
+	}
+	BroadcastRoomInfo();
 }
 
 void HandleReady(Session* s, const C2S_READY_PACKET* packet)
 {
-	// [S4] HandleReady: room.lock을 잡고 로그인 전이거나 게임 중이면 무시, ready 갱신
-	// 락을 푼 뒤 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_READY_PACKET) ||
+		(packet->ready != READY_NO && packet->ready != READY_YES))
+		return;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId < 0 || room.state == ROOM_IN_GAME)
+			return;
+		s->ready = packet->ready;
+	}
+	BroadcastRoomInfo();
 }
 
 void HandleStart(Session* s)
 {
-	// [S4] HandleStart: room.lock을 잡고 방장인지, 로그인한 사람 전원이 레디인지 확인, 맞으면 startRequested = true
+	std::lock_guard<std::mutex> lock(room.lock);
+	if (s->playerId < 0 || s->playerId != room.hostId || room.state == ROOM_IN_GAME)
+		return;
+	for (const Session& other : room.sessions)
+		if (other.used && other.playerId >= 0 && other.ready != READY_YES)
+			return;	// 레디 안 한 사람이 있음
+	room.startRequested = true;	// 게임 로직 스레드의 StartGame이 확인
+	printf("게임 시작 요청 (방장 %d)\n", s->playerId);
 }
 
 void BroadcastRoomInfo()
 {
-	// [S4] BroadcastRoomInfo: room.lock을 잡고 S2C_ROOM_INFO 작성, 락을 푼 뒤 Broadcast
+	S2C_ROOM_INFO_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_ROOM_INFO;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		packet.hostId = room.hostId < 0 ? 0xFF : (UINT8)room.hostId;
+		for (const Session& s : room.sessions) {
+			if (!s.used || s.playerId < 0)
+				continue;
+			RoomMember& member = packet.members[s.playerId];
+			member.used = 1;
+			member.charType = s.charType;
+			member.ready = s.ready;
+			std::memcpy(member.name, s.name, sizeof(member.name));
+		}
+	}
+	Broadcast(&packet, sizeof(packet));	// Broadcast가 room.lock을 잡으니 락을 푼 뒤 호출
 }
 
 void PassHost()

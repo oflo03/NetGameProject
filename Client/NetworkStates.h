@@ -41,7 +41,16 @@ public:
 class LobbyState : public GameState
 {
 private:
+	CImage background;
+	CImage charImage[2];	// CHAR_MARIN, CHAR_KNIGHT 순서
 	S2C_ROOM_INFO_PACKET roomInfo = {};
+	bool hasRoomInfo = false;
+	RECT memberRect[MAX_PLAYERS];
+	RECT charButton[2];	// MARIN, KNIGHT
+	RECT readyButton, startButton;
+
+	const RoomMember* Me() const;	// 대기실 정보의 내 칸 (아직 못 받았으면 nullptr)
+	bool IsHost() const;
 public:
 	LobbyState();
 	void SendSelectChar(uint8_t charType);
