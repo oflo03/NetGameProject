@@ -27,6 +27,13 @@ public:
 	float attackCooldown = 0;	// 남은 시간은 초 단위
 	float spawnTime = 0;
 	float moveTime = 0;
+	bool targetLocked = false;
+	bool reloading = false;
+	bool attackStarted = false;
+	bool waveActive = false;
+	float actionTime = 0;
+	float waveEffectTime = 0;
+	float waveRadius = 0;
 	std::unique_ptr<BT::Node> tree;
 };
 

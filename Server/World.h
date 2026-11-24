@@ -27,6 +27,9 @@ private:
 	int phase = 0;
 	std::uint32_t tick = 0;
 	std::uint16_t nextBulletId = 0;
+	std::uint16_t nextEnemyId = 0;
+	int spawnedStage = 0;
+	int spawnedPhase = 0;
 	bool portalOpen = false;
 	Vector2D<float> portalPos;
 	std::vector<std::vector<char>> events;	// 이번 틱의 Protocol.h 이벤트 패킷 바이트

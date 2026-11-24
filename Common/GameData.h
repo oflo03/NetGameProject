@@ -123,6 +123,16 @@ namespace GameData
 	inline constexpr float GunnerCooldownMultiplier = 2.0f;
 	inline constexpr float GunnerFirstShotDelaySeconds = 100 / OriginalUpdatesPerSecond;
 	inline constexpr float GunnerReloadSeconds = 300 / OriginalUpdatesPerSecond;
+	inline constexpr float EnemySpawnSeconds = 2.0f;
+	inline constexpr float BatDetectionRange = 600.0f;
+	inline constexpr float BatFuseSeconds = 0.5f;
+	inline constexpr float BansheeWindupSeconds = 0.4f;
+	inline constexpr int ContactDamage = 5;
+	// Client/Effect.h의 CEffect 값
+	enum EffectKind : std::uint8_t
+	{
+		EFFECT_BANSHEE_START = 6, EFFECT_BANSHEE_LOOP = 7, EFFECT_BAT_EXPLOSION = 8
+	};
 	inline constexpr float BatBlastRadius = 100.0f;
 	inline constexpr float BombsheWaveMaxRadius = 100.0f;
 	inline constexpr float BombsheWaveGrowthPerSecond = 1.0f * OriginalUpdatesPerSecond;

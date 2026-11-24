@@ -89,8 +89,11 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 	stage = phase = 1;
 	tick = 0;
 	nextBulletId = 0;
+	nextEnemyId = 0;
+	spawnedStage = spawnedPhase = 0;
 	portalOpen = false;
 	portalPos = {};
+	SpawnWave();
 	return true;
 }
 
@@ -275,7 +278,8 @@ bool World::HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::arra
 				return true;
 	if (bullet.side == GameData::BULLET_SIDE_PLAYER) {
 		for (auto& enemy : enemies) {
-			if (!enemy->active || enemy->hp <= 0)
+			if (!enemy->active || enemy->hp <= 0 || enemy->spawnTime > 0 ||
+				(enemy->type == GameData::EnemyKind::Bat && enemy->attackStarted))
 				continue;
 			const bool overlap = enemy->type == GameData::EnemyKind::Bat ?
 				CollisionCheck::CircleCircle(pos, size, enemy->pos, enemy->size) :
@@ -316,6 +320,7 @@ void World::SwordSlash(ServerPlayer& player)
 	const auto center = player.pos + Vector2D<float>(std::abs(player.swordAngle) < 90 ? 18.0f : -17.0f, 8.0f);
 	for (auto& enemy : enemies)
 		if (enemy->active && enemy->hp > 0 && enemy->spawnTime <= 0 &&
+			!(enemy->type == GameData::EnemyKind::Bat && enemy->attackStarted) &&
 			InSwordArc(center, player.swordAngle, enemy->pos, enemy->size))
 			DamageEnemy(*enemy, GameData::SwordDamage);
 	if (boss && boss->active && boss->hp > 0 &&
@@ -380,7 +385,116 @@ void World::DamagePlayer(ServerPlayer& player, int damage)
 
 void World::UpdateEnemies(float deltaTime)
 {
-	// [S11] World::UpdateEnemies: 적 타깃 선택, Behavior Tree 실행, 이동
+	// [S11] World::UpdateEnemies: 생성 대기 후 타깃·BT·이동·공격을 갱신한다.
+	for (auto& pointer : enemies) {
+		auto& enemy = *pointer;
+		if (!enemy.active || enemy.hp <= 0)
+			continue;
+		const float activeTime = std::max(0.0f, deltaTime - enemy.spawnTime);
+		enemy.spawnTime = std::max(0.0f, enemy.spawnTime - deltaTime);
+		if (activeTime <= 0)
+			continue;
+		enemy.lastPos = enemy.pos;
+		enemy.attackCooldown = std::max(0.0f, enemy.attackCooldown - activeTime);
+		enemy.moveTime = std::max(0.0f, enemy.moveTime - activeTime);
+		const auto* target = FindNearestPlayer(enemy.pos);
+		enemy.targetPlayerId = target ? target->playerId : -1;
+		if (target) {
+			const auto offset = target->pos - enemy.pos;
+			enemy.angle = static_cast<float>(std::atan2(offset.y, offset.x) * 180.0 / M_PI);
+		} else
+			enemy.dir = {};
+		if (enemy.tree)
+			enemy.tree->Tick(*this, enemy, activeTime);
+
+		if (enemy.type == GameData::EnemyKind::Bat && enemy.attackStarted) {
+			enemy.actionTime = std::max(0.0f, enemy.actionTime - activeTime);
+			if (enemy.actionTime <= 0) {
+				const Vector2D<float> radius(GameData::BatBlastRadius, GameData::BatBlastRadius);
+				for (auto& player : players)
+					if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
+						DamagePlayer(player, GameData::ContactDamage);
+				enemy.hp = 0;
+				enemy.active = false;
+				S2C_ENEMY_DEAD_PACKET dead{};
+				dead.size = sizeof(dead);
+				dead.type = S2C_ENEMY_DEAD;
+				dead.id = enemy.id;
+				PushEvent(&dead, sizeof(dead));
+				S2C_EFFECT_PACKET effect{};
+				effect.size = sizeof(effect);
+				effect.PacketHeader::type = S2C_EFFECT;
+				effect.S2C_EFFECT_PACKET::type = GameData::EFFECT_BAT_EXPLOSION;
+				effect.x = enemy.pos.x;
+				effect.y = enemy.pos.y;
+				PushEvent(&effect, sizeof(effect));
+			}
+			continue;
+		}
+		if (enemy.type == GameData::EnemyKind::Bombshe && enemy.attackStarted) {
+			enemy.actionTime += activeTime;
+			enemy.waveRadius = std::min(GameData::BombsheWaveMaxRadius, enemy.actionTime * GameData::BombsheWaveGrowthPerSecond);
+			if (enemy.actionTime >= GameData::BansheeWindupSeconds) {
+				enemy.waveEffectTime -= activeTime;
+				if (!enemy.waveActive || enemy.waveEffectTime <= 0) {
+					S2C_EFFECT_PACKET effect{};
+					effect.size = sizeof(effect);
+					effect.PacketHeader::type = S2C_EFFECT;
+					effect.S2C_EFFECT_PACKET::type = enemy.waveActive ? GameData::EFFECT_BANSHEE_LOOP : GameData::EFFECT_BANSHEE_START;
+					effect.x = enemy.pos.x;
+					effect.y = enemy.pos.y;
+					PushEvent(&effect, sizeof(effect));
+					enemy.waveEffectTime = enemy.waveActive ? 0.4f : 1.0f;
+					enemy.waveActive = true;
+				}
+				const Vector2D<float> radius(enemy.waveRadius, enemy.waveRadius);
+				for (auto& player : players)
+					if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
+						DamagePlayer(player, GameData::ContactDamage);
+			}
+		}
+
+		// 박쥐는 물 위를 날고, 나머지 적은 벽과 물을 모두 피한다.
+		const bool bat = enemy.type == GameData::EnemyKind::Bat;
+		auto blocked = [&](Vector2D<float> pos) {
+			if (pos.x - enemy.size.x < 0 || pos.y - enemy.size.y < 0 ||
+				pos.x + enemy.size.x > TileMap::Columns * TileMap::TileExtent ||
+				pos.y + enemy.size.y > TileMap::Rows * TileMap::TileExtent)
+				return true;
+			for (const auto& tile : map.blockedTiles) {
+				if (bat && tile.type == TileMap::WaterType)
+					continue;
+				if (bat ? CollisionCheck::CircleRect(pos, enemy.size, tile.pos, tile.size) :
+					CollisionCheck::RectRect(pos, enemy.size, tile.pos, tile.size))
+					return true;
+			}
+			return false;
+		};
+		const auto movement = enemy.dir * (enemy.moveSpeedPerSecond * activeTime);
+		const float distance = std::max(std::abs(movement.x), std::abs(movement.y));
+		const int steps = std::max(1, static_cast<int>(std::ceil(distance / 4.0f)));
+		const auto step = movement / static_cast<float>(steps);
+		for (int i = 0; i < steps; ++i) {
+			const auto horizontal = enemy.pos + Vector2D<float>(step.x, 0);
+			if (!blocked(horizontal))
+				enemy.pos.x = horizontal.x;
+			const auto vertical = enemy.pos + Vector2D<float>(0, step.y);
+			if (!blocked(vertical))
+				enemy.pos.y = vertical.y;
+		}
+		for (auto& player : players) {
+			if (!player.used || player.hp <= 0)
+				continue;
+			const bool overlap = bat ? CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, enemy.size) :
+				CollisionCheck::RectRect(player.pos, player.size, enemy.pos, enemy.size);
+			if (!overlap)
+				continue;
+			DamagePlayer(player, GameData::ContactDamage);
+			enemy.pos = enemy.lastPos;
+			if (!IsPlayerBlocked(map, player.lastPos, player.size))
+				player.pos = player.lastPos;
+		}
+	}
 }
 
 const ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
@@ -409,7 +523,51 @@ void World::DamageEnemy(ServerEnemy& enemy, int damage)
 
 void World::SpawnWave()
 {
-	// [S12] World::SpawnWave: 현재 스테이지·웨이브 표대로 적 생성
+	// [S12] World::SpawnWave: 같은 웨이브를 중복 생성하지 않는다.
+	if (stage < 1 || stage > 3 || phase < 1 || phase > 3 ||
+		(spawnedStage == stage && spawnedPhase == phase))
+		return;
+	const auto wave = GameData::StageWaves[stage - 1][phase - 1];
+	const auto activeCount = std::count_if(enemies.begin(), enemies.end(), [](const auto& enemy) { return enemy->active; });
+	if (activeCount + wave.size() > MAX_ENEMIES)
+		return;
+	for (const auto& spawn : wave) {
+		std::uint16_t id = nextEnemyId++;
+		while (std::any_of(enemies.begin(), enemies.end(), [id](const auto& enemy) { return enemy->active && enemy->id == id; }))
+			id = nextEnemyId++;
+		const auto& stats = GameData::Enemies[static_cast<std::size_t>(spawn.kind)];
+		auto enemy = std::make_unique<ServerEnemy>();
+		enemy->active = true;
+		enemy->id = id;
+		enemy->type = spawn.kind;
+		enemy->hp = static_cast<std::int16_t>(stats.hp);
+		enemy->pos = enemy->lastPos = { spawn.position.x, spawn.position.y };
+		enemy->size = { stats.halfWidth, stats.halfHeight };
+		enemy->moveSpeedPerSecond = stats.moveSpeedPerSecond;
+		enemy->attackRange = stats.attackRange;
+		enemy->spawnTime = GameData::EnemySpawnSeconds;
+		if (spawn.kind <= GameData::EnemyKind::Shotgunman) {
+			enemy->weapon = static_cast<std::uint8_t>(spawn.kind) + WEAPON_PISTOL;
+			enemy->ammo = GameData::Weapons[enemy->weapon].maxAmmo / GameData::GunnerAmmoDivisor;
+			enemy->attackCooldown = GameData::GunnerFirstShotDelaySeconds;
+			enemy->moveTime = 200 / GameData::OriginalUpdatesPerSecond;
+			enemy->tree = BuildGunnerTree();
+		} else if (spawn.kind == GameData::EnemyKind::Bat)
+			enemy->tree = BuildBatTree();
+		else
+			enemy->tree = BuildBansheeTree();
+		enemies.push_back(std::move(enemy));
+		S2C_ENEMY_SPAWN_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.PacketHeader::type = S2C_ENEMY_SPAWN;
+		packet.id = id;
+		packet.S2C_ENEMY_SPAWN_PACKET::type = static_cast<EnemyType>(spawn.kind);
+		packet.x = spawn.position.x;
+		packet.y = spawn.position.y;
+		PushEvent(&packet, sizeof(packet));
+	}
+	spawnedStage = stage;
+	spawnedPhase = phase;
 }
 
 void World::UpdateStage()
