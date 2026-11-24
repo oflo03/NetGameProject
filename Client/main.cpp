@@ -157,7 +157,8 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_DESTROY:
 		end_game();
-		// [C11] NetworkManager::Cleanup
+		NetworkManager::getInstance()->Cleanup();
+		NetworkManager::release();
 		PostQuitMessage(0);
 		break;
 	default:

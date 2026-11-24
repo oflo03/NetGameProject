@@ -145,7 +145,10 @@ void BroadcastRoomInfo()
 
 void PassHost()
 {
-	// [S4] PassHost: 남은 로그인 세션 중 가장 작은 playerId를 hostId로, 없으면 -1
+	room.hostId = -1;
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0 && (room.hostId < 0 || s.playerId < room.hostId))
+			room.hostId = s.playerId;
 }
 
 // ---- S5 패킷 수신 ----
@@ -328,11 +331,43 @@ void FlushSend(Session* s)
 
 void OnDisconnect(Session* s)
 {
-	// [S8] OnDisconnect: room.lock을 잡고 로그인한 세션이면 게임 중 이탈 기록(leftPlayers), playerId = -1, 방장이었으면 PassHost
-	// 락을 푼 뒤 남은 클라이언트에 알림 (게임 중 S2C_PLAYER_LEFT, 대기실 BroadcastRoomInfo), 마지막에 ReleaseSession
+	int playerId;
+	RoomState state;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		playerId = s->playerId;
+		if (playerId >= 0) {
+			s->playerId = -1;	// 이제 Broadcast 대상이 아님
+			// [S8] 게임 중 이탈 기록(leftPlayers)과 S2C_PLAYER_LEFT 알림은 12/1 작업
+			if (room.hostId == playerId)
+				PassHost();
+		}
+		state = room.state;
+	}
+	if (playerId >= 0 && state == ROOM_LOBBY)
+		BroadcastRoomInfo();	// 남은 사람에게 나간 사람·새 방장 알림
+	printf("접속 종료 (슬롯 %d, 플레이어 %d)\n", int(s - room.sessions), playerId);
+	ReleaseSession(s);
 }
 
 void ReleaseSession(Session* s)
 {
-	// [S8] ReleaseSession: closesocket, room.lock을 잡고 슬롯을 필드별로 초기화 (sendQueue, input, recvLength 포함), 마지막에 used = false
+	closesocket(s->sock);
+	std::lock_guard<std::mutex> lock(room.lock);
+	s->sock = INVALID_SOCKET;
+	s->playerId = -1;
+	std::memset(s->name, 0, sizeof(s->name));
+	s->charType = CHAR_MARIN;
+	s->ready = READY_NO;
+	s->recvLength = 0;
+	{
+		std::lock_guard<std::mutex> sendGuard(s->sendLock);
+		s->sendQueue.clear();
+	}
+	{
+		std::lock_guard<std::mutex> inputGuard(s->inputLock);
+		s->input = {};
+	}
+	s->connected = false;
+	s->used = false;	// 마지막에 풀어야 RegisterSession이 다 정리된 슬롯을 받음
 }

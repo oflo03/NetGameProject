@@ -1,6 +1,7 @@
 #include "NetworkManager.h"
 #include <WS2tcpip.h>
 #include "Framework.h"
+#include "Scenes.h"
 #include <algorithm>
 #include <climits>
 #include <cstring>
@@ -159,6 +160,12 @@ void NetworkManager::FlushSend()
 
 void NetworkManager::CloseTransport()
 {
+	Disconnect();
+	OnDisconnected();
+}
+
+void NetworkManager::Disconnect()
+{
 	if (sock != INVALID_SOCKET)
 		closesocket(sock);
 	sock = INVALID_SOCKET;
@@ -166,20 +173,20 @@ void NetworkManager::CloseTransport()
 	recvLength = 0;
 	receiveEnded = false;
 	sendBuffer.clear();
-	OnDisconnected();
-}
-
-void NetworkManager::Disconnect()
-{
-	// [C11] Disconnect: 소켓 닫기
+	playerId = -1;
 }
 
 void NetworkManager::OnDisconnected()
 {
-	// [C11] OnDisconnected: 연결이 끊기면 타이틀로 이동
+	// 서버가 끊으면 화면을 모두 지우고 타이틀(메뉴)로
+	// GameTick의 송수신 단계에서만 불려서 화면 함수 안에서 그 화면이 지워지는 일은 없다
+	// [C11] 게임 중 서버 끊김 처리는 12/4 작업
+	end_game();
+	start_game(new MenuState);
 }
 
 void NetworkManager::Cleanup()
 {
-	// [C11] Cleanup: 프로그램 종료 시 WSACleanup
+	Disconnect();
+	WSACleanup();
 }
