@@ -2,16 +2,37 @@
 #include "Framework.h"
 #include "Common.h"
 #include "Protocol.h"
+#include "EntityView.h"
+#include "Effect.h"
+#include <array>
+#include <unordered_map>
 
 // 서버 상태를 표시하는 온라인 플레이 화면
 class PlayState : public GameState
 {
 public:
+	explicit PlayState(int localPlayerId = -1, const S2C_ROOM_INFO_PACKET& roomInfo = {});
 	void update() override;
 	void handle_events() override;
 	void draw() override;
+	void process_packet(const PacketHeader* packet) override;
 
 private:
+	int localPlayerId;
+	S2C_ROOM_INFO_PACKET roomInfo;
+	std::array<PlayerView, MAX_PLAYERS> playerViews{};
+	std::unordered_map<UINT16, EnemyView> enemyViews;
+	BossView bossView;
+	std::unordered_map<UINT16, BulletView> bulletViews;
+	std::vector<Effect> effects;
+	std::vector<S2C_PLAYER_EVENT_PACKET> playerEvents;
+	bool hasSnapshot = false;
+	UINT32 snapshotTick = 0;
+	ULONGLONG snapshotReceivedAt = 0;
+
+	void UpdateCamera();
+	void AddEffect(CEffect type, Vector2D<float> position);
+	void OnSnapshot(const S2C_SNAPSHOT_PACKET& packet);
 	C2S_INPUT_PACKET input{{sizeof(C2S_INPUT_PACKET), C2S_INPUT}, {}, WEAPON_KEEP, 0, 0};
 	UINT8 previousActions = 0;
 	UINT8 previousWeapons = 0;

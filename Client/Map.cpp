@@ -49,18 +49,25 @@ MapManager* MapManager::getInstance()
 	return instance;
 }
 
-void MapManager::LoadTileMap(int stage)
+void MapManager::LoadTileMap(int stage, bool createColliders)
 {
 	if (stage < 1 || stage > 4)
 		return;
 	currentStage = stage;
 	std::ifstream mapFile("resources/map" + std::to_string(stage) + ".txt");
+	if (!mapFile)
+		return;
 	for (int i = 0; i < MapHeight; ++i)
 		for (int j = 0; j < MapWidth; ++j)
 		{
-			mapFile >> Maps[i][j];
-			if (Maps[i][j].type == wall_t || Maps[i][j].type == poke_water)
-				Maps[i][j].col->pos = Vector2D<float>(j * PTS + TileSize, i * PTS + TileSize);
+			auto& tile = Maps[i][j];
+			if (!createColliders) {
+				mapFile >> tile.type >> tile.tilePos;
+				continue;
+			}
+			mapFile >> tile;
+			if (tile.type == wall_t || tile.type == poke_water)
+				tile.col->pos = Vector2D<float>(j * PTS + TileSize, i * PTS + TileSize);
 		}
 }
 

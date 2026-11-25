@@ -41,7 +41,7 @@ private:
 	MapManager();
 public:
 	static MapManager* getInstance();
-	void LoadTileMap(int stage);	// resources/map{stage}.txt
+	void LoadTileMap(int stage, bool createColliders = true);	// resources/map{stage}.txt
 	void PrintMap(HDC mDC);
 };
 

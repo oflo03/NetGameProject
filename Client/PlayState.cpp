@@ -1,13 +1,82 @@
 #include "PlayState.h"
+#include "GameData.h"
+#include "Map.h"
 #include "NetworkManager.h"
+#include "Sound.h"
+#include "UI.h"
+#include "Weapon.h"
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
+#include <unordered_set>
 
 namespace {
 	constexpr UINT8 actionMask = KEY_ROLL | KEY_WEAPON_PREV | KEY_WEAPON_NEXT;
+	constexpr int worldWidth = MapWidth * PTS;
+	constexpr int worldHeight = MapHeight * PTS;
+
+	bool IsEffectPosition(float x, float y)
+	{
+		return x >= -PTS && x <= worldWidth + PTS && y >= -PTS && y <= worldHeight + PTS;
+	}
+}
+
+PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
+	: localPlayerId(localPlayerId), roomInfo(roomInfo)
+{
+	MapManager::getInstance()->LoadTileMap(1, false);
+	camPos = { worldWidth / 2.0f, worldHeight / 2.0f };
 }
 
 void PlayState::update()
 {
-	// [C5] update: 서버에서 받은 상태로 화면 갱신
+	for (auto& bullet : bulletViews)
+		bullet.second.update();
+	for (auto& effect : effects)
+		effect.update();
+	std::erase_if(effects, [](const Effect& effect) { return effect.time >= Effect::effect[effect.type].frame; });
+	SoundManager::getInstance()->update();
+
+	if (!hasSnapshot)
+		return;
+
+	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
+	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		auto& view = playerViews[i];
+		if (!view.snapshot.used)
+			continue;
+		const auto& member = roomInfo.members[i];
+		if (member.used) {
+			view.charType = member.charType;
+			std::memcpy(view.nickname, member.name, sizeof(member.name));
+		}
+		view.interpolation = alpha;
+		view.update();
+	}
+	UpdateCamera();
+	for (const auto& event : playerEvents)
+		OnPlayerEvent(event);
+	playerEvents.clear();
+}
+
+void PlayState::UpdateCamera()
+{
+	const auto isAlive = [](const PlayerView& view) {
+		return view.snapshot.used && view.snapshot.hp > 0 && view.snapshot.state != STATE_DEAD;
+	};
+	const PlayerView* target = nullptr;
+	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS &&
+		isAlive(playerViews[localPlayerId]))
+		target = &playerViews[localPlayerId];
+	else {
+		const auto survivor = std::find_if(playerViews.begin(), playerViews.end(), isAlive);
+		if (survivor != playerViews.end())
+			target = &*survivor;
+	}
+	if (target)
+		camPos = target->renderPosition;
 }
 
 void PlayState::handle_events()
@@ -18,17 +87,251 @@ void PlayState::handle_events()
 
 void PlayState::draw()
 {
-	// [C9] draw: 서버 상태를 바탕으로 화면 그리기
+	const int width = screen.right - screen.left;
+	const int height = screen.bottom - screen.top;
+	if (!mDC || width <= 0 || height <= 0 || camSize.x <= 0 || camSize.y <= 0)
+		return;
+
+	FillRect(mDC, &screen, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+	const HDC worldDC = CreateCompatibleDC(mDC);
+	if (!worldDC)
+		return;
+	const HBITMAP worldBitmap = CreateCompatibleBitmap(mDC, worldWidth, worldHeight);
+	if (!worldBitmap) {
+		DeleteDC(worldDC);
+		return;
+	}
+	const auto previousBitmap = SelectObject(worldDC, worldBitmap);
+	PatBlt(worldDC, 0, 0, worldWidth, worldHeight, BLACKNESS);
+	MapManager::getInstance()->PrintMap(worldDC);
+
+	std::array<PlayerView*, MAX_PLAYERS> visible{};
+	auto end = visible.begin();
+	for (auto& view : playerViews) {
+		const auto& pos = view.renderPosition;
+		if (view.snapshot.used && pos.x >= 0 && pos.x <= worldWidth &&
+			pos.y >= 0 && pos.y <= worldHeight)
+			*end++ = &view;
+	}
+	std::stable_sort(visible.begin(), end, [](const PlayerView* a, const PlayerView* b) {
+		return a->renderPosition.y < b->renderPosition.y;
+	});
+	for (auto it = visible.begin(); it != end; ++it)
+		(*it)->draw(worldDC);
+	for (auto& bullet : bulletViews)
+		bullet.second.draw(worldDC);
+	for (auto& effect : effects)
+		effect.Draw(worldDC);
+
+	// 카메라가 맵 바깥을 보는 부분은 검은색으로 둠
+	const float left = camPos.x - camSize.x;
+	const float top = camPos.y - camSize.y;
+	const int srcLeft = static_cast<int>(std::clamp(left, 0.0f, static_cast<float>(worldWidth)));
+	const int srcTop = static_cast<int>(std::clamp(top, 0.0f, static_cast<float>(worldHeight)));
+	const int srcRight = static_cast<int>(std::clamp(camPos.x + camSize.x, 0.0f, static_cast<float>(worldWidth)));
+	const int srcBottom = static_cast<int>(std::clamp(camPos.y + camSize.y, 0.0f, static_cast<float>(worldHeight)));
+	if (srcLeft < srcRight && srcTop < srcBottom) {
+		const float scaleX = width / (2 * camSize.x);
+		const float scaleY = height / (2 * camSize.y);
+		const int dstLeft = static_cast<int>(std::lround((srcLeft - left) * scaleX));
+		const int dstRight = static_cast<int>(std::lround((srcRight - left) * scaleX));
+		const int dstTop = static_cast<int>(std::lround((srcTop - top) * scaleY));
+		const int dstBottom = static_cast<int>(std::lround((srcBottom - top) * scaleY));
+		StretchBlt(mDC, screen.left + dstLeft, screen.top + dstTop, dstRight - dstLeft, dstBottom - dstTop,
+			worldDC, srcLeft, srcTop, srcRight - srcLeft, srcBottom - srcTop, SRCCOPY);
+	}
+
+	SelectObject(worldDC, previousBitmap);
+	DeleteObject(worldBitmap);
+	DeleteDC(worldDC);
+
+	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS && playerViews[localPlayerId].snapshot.used)
+		UI::getInstance()->draw(mDC, playerViews[localPlayerId].snapshot);
+	const HWND window = GetActiveWindow();
+	POINT point = mPoint;
+	if (window && ScreenToClient(window, &point) && !cursor.IsNull())
+		cursor.Draw(mDC, point.x - 20, point.y - 30, 40, 40);
+}
+
+void PlayState::process_packet(const PacketHeader* packet)
+{
+	if (!packet || packet->size < sizeof(PacketHeader) || packet->size > MAX_PACKET_SIZE)
+		return;
+
+	// 고정 길이 패킷은 크기를 확인하고 복사한 뒤 전달
+	const auto dispatch = [this, packet]<typename T>(void (PlayState::*handler)(const T&)) {
+		if (packet->size != sizeof(T))
+			return;
+		T value{};
+		std::memcpy(&value, packet, sizeof(value));
+		(this->*handler)(value);
+	};
+
+	switch (packet->type) {
+	case S2C_SNAPSHOT:
+	{
+		constexpr size_t baseSize = offsetof(S2C_SNAPSHOT_PACKET, enemies);
+		if (packet->size < baseSize || packet->size > sizeof(S2C_SNAPSHOT_PACKET))
+			return;
+		S2C_SNAPSHOT_PACKET snapshot{};
+		std::memcpy(&snapshot, packet, packet->size);
+		if (snapshot.enemyCount > MAX_ENEMIES ||
+			packet->size != baseSize + snapshot.enemyCount * sizeof(EnemySnap))
+			return;
+		OnSnapshot(snapshot);
+		break;
+	}
+	case S2C_BULLET_SPAWN:
+	{
+		constexpr size_t baseSize = offsetof(S2C_BULLET_SPAWN_PACKET, bullets);
+		if (packet->size < baseSize || packet->size > sizeof(S2C_BULLET_SPAWN_PACKET))
+			return;
+		S2C_BULLET_SPAWN_PACKET bullets{};
+		std::memcpy(&bullets, packet, packet->size);
+		if (bullets.count > MAX_SPAWN_BULLETS ||
+			packet->size != baseSize + bullets.count * sizeof(BulletSpawn))
+			return;
+		OnBulletSpawn(bullets);
+		break;
+	}
+	case S2C_BULLET_REMOVE: dispatch(&PlayState::OnBulletRemove); break;
+	case S2C_ENEMY_SPAWN: dispatch(&PlayState::OnEnemySpawn); break;
+	case S2C_ENEMY_DEAD: dispatch(&PlayState::OnEnemyDead); break;
+	case S2C_PLAYER_EVENT: dispatch(&PlayState::OnPlayerEvent); break;
+	case S2C_DROP: dispatch(&PlayState::OnDrop); break;
+	case S2C_EFFECT: dispatch(&PlayState::OnEffect); break;
+	case S2C_BOSS: dispatch(&PlayState::OnBoss); break;
+	case S2C_PORTAL: dispatch(&PlayState::OnPortal); break;
+	case S2C_STAGE_LOAD:
+		if (packet->size == sizeof(S2C_STAGE_LOAD_PACKET)) {
+			playerViews = {};
+			enemyViews.clear();
+			bossView = {};
+			bulletViews.clear();
+			effects.clear();
+			playerEvents.clear();
+			hasSnapshot = false;
+			dispatch(&PlayState::OnStageLoad);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
+{
+	if (packet.enemyCount > MAX_ENEMIES)
+		return;
+	// 같은 틱이나 오래된 스냅샷으로 상태를 되돌리지 않음
+	if (hasSnapshot) {
+		const UINT32 distance = packet.tick - snapshotTick;
+		if (distance == 0 || distance >= 0x80000000u)
+			return;
+	}
+	const auto finitePosition = [](float x, float y) {
+		return std::isfinite(x) && std::isfinite(y);
+	};
+	for (const auto& player : packet.players)
+		if (player.used && (!finitePosition(player.x, player.y) || !std::isfinite(player.angle)))
+			return;
+	if (packet.boss.active && !finitePosition(packet.boss.x, packet.boss.y))
+		return;
+	if (packet.boss.active)
+		for (int i = 0; i < 2; ++i)
+			if (!finitePosition(packet.boss.handX[i], packet.boss.handY[i]))
+				return;
+	std::unordered_set<UINT16> ids;
+	for (int i = 0; i < packet.enemyCount; ++i) {
+		const auto& enemy = packet.enemies[i];
+		if (!finitePosition(enemy.x, enemy.y) || !std::isfinite(enemy.angle) || !ids.insert(enemy.id).second)
+			return;
+	}
+
+	const auto move = [](EntityView& view, float x, float y) {
+		const Vector2D<float> position(x, y);
+		view.previousPosition = view.hasPosition ? view.currentPosition : position;
+		view.currentPosition = position;
+		view.hasPosition = true;
+	};
+	for (int i = 0; i < MAX_PLAYERS; ++i) {
+		auto& view = playerViews[i];
+		if (!packet.players[i].used)
+			view = {};
+		else
+			move(view, packet.players[i].x, packet.players[i].y);
+		view.snapshot = packet.players[i];
+	}
+	for (auto it = enemyViews.begin(); it != enemyViews.end(); ) {
+		if (!ids.contains(it->first))
+			it = enemyViews.erase(it);
+		else
+			++it;
+	}
+	for (int i = 0; i < packet.enemyCount; ++i) {
+		const auto& enemy = packet.enemies[i];
+		auto& view = enemyViews[enemy.id];
+		move(view, enemy.x, enemy.y);
+		view.snapshot = enemy;
+	}
+	if (!packet.boss.active)
+		bossView = {};
+	else
+		move(bossView, packet.boss.x, packet.boss.y);
+	bossView.snapshot = packet.boss;
+	snapshotTick = packet.tick;
+	snapshotReceivedAt = GetTickCount64();
+	hasSnapshot = true;
 }
 
 void PlayState::OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet)
 {
-	// [C6] OnBulletSpawn: 총알 생성 연출
+	constexpr int shotSounds[] = { PISTOL_SHOT, RIFLE_SHOT, SHOTGUN_SHOT };
+	bool played[BROCKET + 1]{};
+	for (int i = 0; i < packet.count; ++i) {
+		const auto& spawn = packet.bullets[i];
+		if (spawn.type >= std::size(GameData::Bullets) ||
+			(spawn.side != playerBullet && spawn.side != enemyBullet) ||
+			!IsEffectPosition(spawn.x, spawn.y) || !std::isfinite(spawn.dirX) || !std::isfinite(spawn.dirY))
+			continue;
+
+		Vector2D<float> direction(spawn.dirX, spawn.dirY);
+		if (spawn.type != BOSSBULLET1) {
+			const double length = std::hypot(static_cast<double>(spawn.dirX), static_cast<double>(spawn.dirY));
+			if (length == 0)
+				continue;
+			direction = { static_cast<float>(spawn.dirX / length), static_cast<float>(spawn.dirY / length) };
+		} else if (!IsEffectPosition(spawn.dirX, spawn.dirY)) {
+			continue;
+		}
+		auto [it, inserted] = bulletViews.try_emplace(spawn.id);
+		if (!inserted)
+			continue;
+		it->second.spawn = spawn;
+		it->second.position = { spawn.x, spawn.y };
+		it->second.direction = direction;
+		if (!played[spawn.type] && spawn.side == playerBullet) {
+			if (spawn.type <= BSHOTGUN)
+				SoundManager::getInstance()->play(shotSounds[spawn.type]);
+			else if (spawn.type == BROCKET)
+				SoundManager::getInstance()->play(ROCKET_SHOT);
+			played[spawn.type] = true;
+		}
+	}
 }
 
 void PlayState::OnBulletRemove(const S2C_BULLET_REMOVE_PACKET& packet)
 {
-	// [C6] OnBulletRemove: 총알 제거와 피격 연출
+	const auto it = bulletViews.find(packet.id);
+	if (it == bulletViews.end())
+		return;
+	const UINT8 type = it->second.spawn.type;
+	bulletViews.erase(it);
+	if (!packet.hit)
+		return;
+	constexpr CEffect hits[] = { PISTOLBULLET, RIFLEBULLET, SHOTGUNBULLET, ENEMYBULLET, BOUNCEBULLET,
+		PATTERNA, PATTERNB, PATTERNA, PATTERNB, EXPLOSION };
+	AddEffect(hits[type], { packet.x, packet.y });
 }
 
 void PlayState::OnEnemySpawn(const S2C_ENEMY_SPAWN_PACKET& packet)
@@ -43,7 +346,46 @@ void PlayState::OnEnemyDead(const S2C_ENEMY_DEAD_PACKET& packet)
 
 void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 {
-	// [C6] OnPlayerEvent: 플레이어 이벤트 연출
+	if (packet.playerId >= MAX_PLAYERS || packet.event > PE_REVIVE)
+		return;
+	if (!hasSnapshot) {
+		playerEvents.push_back(packet);
+		return;
+	}
+	const auto& view = playerViews[packet.playerId];
+	if (!view.hasPosition)
+		return;
+	const auto position = view.currentPosition;
+	auto* sound = SoundManager::getInstance();
+	switch (packet.event) {
+	case PE_HIT:
+		AddEffect(DAMAGED, position);
+		sound->play(PLAYER_HURT);
+		break;
+	case PE_DEAD:
+		sound->play(PLAYER_DEATH);
+		break;
+	case PE_SWORD:
+		AddEffect(SWORDATTACK, position);
+		sound->play(SWORD_ATK);
+		break;
+	case PE_PICKUP:
+		sound->play(CURSORON);
+		break;
+	case PE_REVIVE:
+		AddEffect(TELEPORT, position);
+		break;
+	default:
+		break;
+	}
+}
+
+void PlayState::AddEffect(CEffect type, Vector2D<float> position)
+{
+	if (!IsEffectPosition(position.x, position.y))
+		return;
+	EffectManager::getInstance();
+	effects.emplace_back(type, position);
 }
 
 void PlayState::OnDrop(const S2C_DROP_PACKET& packet)
