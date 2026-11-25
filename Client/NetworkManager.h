@@ -25,6 +25,8 @@ private:
 	void CloseTransport();
 
 public:
+	int playerId = -1;	// 내 플레이어 ID (로그인 성공 시 LoginState가 저장, 로그인 전 -1)
+
 	static NetworkManager* getInstance();
 	static void release();
 	bool Init();

@@ -1,60 +1,154 @@
 #include "ClientThread.h"
+#include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <cwchar>
 
 // ---- S3 로그인 처리 ----
 
 void HandleLogin(Session* s, const C2S_LOGIN_PACKET* packet)
 {
-	// [S3] HandleLogin: 이미 로그인한 세션이면 무시, name 끝을 널 문자로 막음
-	// room.lock을 잡고 게임 중 → 인원 → 닉네임 중복 순서로 확인, 통과하면 빈 playerId 발급 (첫 로그인이면 방장)
-	// 락을 푼 뒤 SendLoginResult, 성공이면 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_LOGIN_PACKET))
+		return;	// 크기가 다르면 연결 종료는 11/27 작업, 여기서는 읽지 않고 무시
+	wchar_t name[NAME_LEN];
+	std::memcpy(name, packet->name, sizeof(name));
+	name[NAME_LEN - 1] = L'\0';	// 클라가 널 문자를 안 넣어 보내도 끝을 막음
+	if (name[0] == L'\0')
+		return;
+
+	LoginResult result = LOGIN_OK;
+	int playerId = -1;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId >= 0)
+			return;	// 이미 로그인한 세션
+		// [S3] 게임 진행 중 거절(LOGIN_IN_GAME)은 11/27 작업
+		if (CountLoggedIn() >= MAX_PLAYERS)
+			result = LOGIN_FULL;
+		else if (IsNameTaken(name))
+			result = LOGIN_NAME_TAKEN;
+		else {
+			// 비어 있는 가장 작은 playerId 발급
+			bool taken[MAX_PLAYERS] = {};
+			for (const Session& other : room.sessions)
+				if (other.used && other.playerId >= 0)
+					taken[other.playerId] = true;
+			playerId = 0;
+			while (taken[playerId])
+				++playerId;
+
+			s->playerId = playerId;
+			std::memcpy(s->name, name, sizeof(name));
+			s->charType = CHAR_MARIN;
+			s->ready = READY_NO;
+			if (room.hostId < 0)
+				room.hostId = playerId;	// 첫 로그인이면 방장
+		}
+	}
+
+	SendLoginResult(s, result, playerId < 0 ? 0 : (UINT8)playerId);
+	if (result == LOGIN_OK) {
+		printf("로그인 (슬롯 %d, 플레이어 %d)\n", int(s - room.sessions), playerId);
+		BroadcastRoomInfo();
+	}
 }
 
 bool IsNameTaken(const wchar_t* name)
 {
-	// [S3] IsNameTaken: 로그인한 세션 중 같은 닉네임이 있는지 확인
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0 && std::wcscmp(s.name, name) == 0)
+			return true;
 	return false;
 }
 
 int CountLoggedIn()
 {
-	// [S3] CountLoggedIn: 로그인한 세션 수 (playerId >= 0)
-	return 0;
+	int count = 0;
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0)
+			++count;
+	return count;
 }
 
 void SendLoginResult(Session* s, LoginResult result, UINT8 playerId)
 {
-	// [S3] SendLoginResult: S2C_LOGIN_RESULT를 EnqueueSend
+	S2C_LOGIN_RESULT_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_LOGIN_RESULT;
+	packet.result = result;
+	packet.playerId = playerId;
+	EnqueueSend(s, &packet, sizeof(packet));
 }
 
 // ---- S4 대기실 처리 ----
 
 void HandleSelectChar(Session* s, const C2S_SELECT_CHAR_PACKET* packet)
 {
-	// [S4] HandleSelectChar: room.lock을 잡고 로그인 전이거나 게임 중이거나 charType이 CHAR_MARIN·CHAR_KNIGHT가 아니면 무시, charType 갱신
-	// 락을 푼 뒤 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_SELECT_CHAR_PACKET) ||
+		(packet->charType != CHAR_MARIN && packet->charType != CHAR_KNIGHT))
+		return;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId < 0 || room.state == ROOM_IN_GAME)
+			return;
+		s->charType = packet->charType;
+	}
+	BroadcastRoomInfo();
 }
 
 void HandleReady(Session* s, const C2S_READY_PACKET* packet)
 {
-	// [S4] HandleReady: room.lock을 잡고 로그인 전이거나 게임 중이면 무시, ready 갱신
-	// 락을 푼 뒤 BroadcastRoomInfo
+	if (packet->size != sizeof(C2S_READY_PACKET) ||
+		(packet->ready != READY_NO && packet->ready != READY_YES))
+		return;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (s->playerId < 0 || room.state == ROOM_IN_GAME)
+			return;
+		s->ready = packet->ready;
+	}
+	BroadcastRoomInfo();
 }
 
 void HandleStart(Session* s)
 {
-	// [S4] HandleStart: room.lock을 잡고 방장인지, 로그인한 사람 전원이 레디인지 확인, 맞으면 startRequested = true
+	std::lock_guard<std::mutex> lock(room.lock);
+	if (s->playerId < 0 || s->playerId != room.hostId || room.state == ROOM_IN_GAME)
+		return;
+	for (const Session& other : room.sessions)
+		if (other.used && other.playerId >= 0 && other.ready != READY_YES)
+			return;	// 레디 안 한 사람이 있음
+	room.startRequested = true;	// 게임 로직 스레드의 StartGame이 확인
+	printf("게임 시작 요청 (방장 %d)\n", s->playerId);
 }
 
 void BroadcastRoomInfo()
 {
-	// [S4] BroadcastRoomInfo: room.lock을 잡고 S2C_ROOM_INFO 작성, 락을 푼 뒤 Broadcast
+	S2C_ROOM_INFO_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_ROOM_INFO;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		packet.hostId = room.hostId < 0 ? 0xFF : (UINT8)room.hostId;
+		for (const Session& s : room.sessions) {
+			if (!s.used || s.playerId < 0)
+				continue;
+			RoomMember& member = packet.members[s.playerId];
+			member.used = 1;
+			member.charType = s.charType;
+			member.ready = s.ready;
+			std::memcpy(member.name, s.name, sizeof(member.name));
+		}
+	}
+	Broadcast(&packet, sizeof(packet));	// Broadcast가 room.lock을 잡으니 락을 푼 뒤 호출
 }
 
 void PassHost()
 {
-	// [S4] PassHost: 남은 로그인 세션 중 가장 작은 playerId를 hostId로, 없으면 -1
+	room.hostId = -1;
+	for (const Session& s : room.sessions)
+		if (s.used && s.playerId >= 0 && (room.hostId < 0 || s.playerId < room.hostId))
+			room.hostId = s.playerId;
 }
 
 // ---- S5 패킷 수신 ----
@@ -237,11 +331,43 @@ void FlushSend(Session* s)
 
 void OnDisconnect(Session* s)
 {
-	// [S8] OnDisconnect: room.lock을 잡고 로그인한 세션이면 게임 중 이탈 기록(leftPlayers), playerId = -1, 방장이었으면 PassHost
-	// 락을 푼 뒤 남은 클라이언트에 알림 (게임 중 S2C_PLAYER_LEFT, 대기실 BroadcastRoomInfo), 마지막에 ReleaseSession
+	int playerId;
+	RoomState state;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		playerId = s->playerId;
+		if (playerId >= 0) {
+			s->playerId = -1;	// 이제 Broadcast 대상이 아님
+			// [S8] 게임 중 이탈 기록(leftPlayers)과 S2C_PLAYER_LEFT 알림은 12/1 작업
+			if (room.hostId == playerId)
+				PassHost();
+		}
+		state = room.state;
+	}
+	if (playerId >= 0 && state == ROOM_LOBBY)
+		BroadcastRoomInfo();	// 남은 사람에게 나간 사람·새 방장 알림
+	printf("접속 종료 (슬롯 %d, 플레이어 %d)\n", int(s - room.sessions), playerId);
+	ReleaseSession(s);
 }
 
 void ReleaseSession(Session* s)
 {
-	// [S8] ReleaseSession: closesocket, room.lock을 잡고 슬롯을 필드별로 초기화 (sendQueue, input, recvLength 포함), 마지막에 used = false
+	closesocket(s->sock);
+	std::lock_guard<std::mutex> lock(room.lock);
+	s->sock = INVALID_SOCKET;
+	s->playerId = -1;
+	std::memset(s->name, 0, sizeof(s->name));
+	s->charType = CHAR_MARIN;
+	s->ready = READY_NO;
+	s->recvLength = 0;
+	{
+		std::lock_guard<std::mutex> sendGuard(s->sendLock);
+		s->sendQueue.clear();
+	}
+	{
+		std::lock_guard<std::mutex> inputGuard(s->inputLock);
+		s->input = {};
+	}
+	s->connected = false;
+	s->used = false;	// 마지막에 풀어야 RegisterSession이 다 정리된 슬롯을 받음
 }

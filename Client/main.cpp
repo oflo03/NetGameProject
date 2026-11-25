@@ -125,7 +125,7 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	switch (iMessage)
 	{
 	case WM_CREATE:
-		// [C1] NetworkManager::Init
+		NetworkManager::getInstance()->Init();
 		GetClientRect(hWnd, &screen);
 		start_game(new LogoState());
 		SetTimer(hWnd, 1, 10, NULL);
@@ -146,8 +146,9 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		break;
 	}
 	case WM_CHAR:
-		// [C1·C2] on_char: 문자 입력을 현재 화면에 전달
-		// stateStack.back()->on_char(static_cast<wchar_t>(wParam));
+		// 문자 입력을 현재 화면에 전달 (서버 IP, 닉네임)
+		if (!stateStack.empty())
+			stateStack.back()->on_char(static_cast<wchar_t>(wParam));
 		break;
 	case WM_TIMER:
 		if (wParam == 1) {
@@ -156,7 +157,8 @@ LRESULT WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_DESTROY:
 		end_game();
-		// [C11] NetworkManager::Cleanup
+		NetworkManager::getInstance()->Cleanup();
+		NetworkManager::release();
 		PostQuitMessage(0);
 		break;
 	default:
