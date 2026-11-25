@@ -15,6 +15,8 @@ public:
 	Vector2D<float> dir;
 	Vector2D<float> orbitCenter;
 	float rotationDegrees = 0;
+	float stepRotationDegrees = 0;
+	bool firstUpdate = true;	// 발사 지점부터 총구까지도 충돌 검사
 	float speedPerSecond = 0;
 	float radius = 0;
 	int damage = 0;

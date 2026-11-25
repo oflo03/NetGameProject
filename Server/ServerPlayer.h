@@ -29,6 +29,10 @@ public:
 	float rollTime = 0;
 	float invulnerableTime = 0;
 	bool interactRequested = false;
+	bool attackRequested = false;	// 벽 충돌 보정 후 발사
+	bool swordPending = false;
+	float swordTime = 0;
+	float swordAngle = 0;	// 휘두르기 시작 방향
 
 	void ApplyInput(const InputState& input, float deltaTime, World& world);
 	bool TryFire(World& world);

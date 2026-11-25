@@ -29,25 +29,41 @@ namespace GameData
 	inline constexpr float RollMoveSeconds = 1.0f / 3.0f;
 	inline constexpr float RollSpeedMultiplier = 3.0f;
 
+	// Client/Weapon.h의 bullet_table과 layertype 값
+	enum BulletKind : std::uint8_t
+	{
+		BULLET_PISTOL, BULLET_RIFLE, BULLET_SHOTGUN, BULLET_ENEMY, BULLET_BOUNCE,
+		BULLET_BOSS_ORBIT, BULLET_BOSS_AIMED, BULLET_BOSS_RADIAL, BULLET_BOSS_REFLECTED,
+		BULLET_ROCKET, BULLET_NONE = 255
+	};
+	enum BulletSide : std::uint8_t
+	{
+		BULLET_SIDE_PLAYER = 4, BULLET_SIDE_ENEMY = 5
+	};
+
 	struct WeaponStats
 	{
 		float cooldownSeconds;
 		int maxAmmo;
 		int projectileCount;
 		int halfSpreadDegrees;
+		BulletKind bulletType;
 	};
 
 	// Client/Weapon.h의 ID 순서. 샷건은 -10도부터 +10도까지 등간격 발사.
 	inline constexpr WeaponStats Weapons[] = {
-		{ 30 / OriginalUpdatesPerSecond, 1, 0, 0 },	// SWORD
-		{ 15 / OriginalUpdatesPerSecond, 20, 1, 5 },	// PISTOL
-		{ 7 / OriginalUpdatesPerSecond, 35, 1, 7 },	// RIFLE
-		{ 30 / OriginalUpdatesPerSecond, 10, 5, 10 },	// SHOTGUN
-		{ 10 / OriginalUpdatesPerSecond, 2, 1, 0 },	// ROCKET
+		{ 30 / OriginalUpdatesPerSecond, 1, 0, 0, BULLET_NONE },	// SWORD
+		{ 15 / OriginalUpdatesPerSecond, 20, 1, 5, BULLET_PISTOL },	// PISTOL
+		{ 7 / OriginalUpdatesPerSecond, 35, 1, 7, BULLET_RIFLE },	// RIFLE
+		{ 30 / OriginalUpdatesPerSecond, 10, 5, 10, BULLET_SHOTGUN },	// SHOTGUN
+		{ 10 / OriginalUpdatesPerSecond, 2, 1, 0, BULLET_ROCKET },	// ROCKET
 	};
+	inline constexpr float WeaponSwitchLeadSeconds = 3 / OriginalUpdatesPerSecond;
 	inline constexpr int SwordDamage = 10;
 	inline constexpr float SwordRange = 110.0f;
 	inline constexpr float SwordHalfAngleDegrees = 60.0f;
+	inline constexpr float SwordWindupSeconds = 4.0f / (4.0f * 8.0f);
+	inline constexpr float PlayerInvulnerableSeconds = 1.0f;
 	inline constexpr float RocketBlastRadius = 100.0f;
 	inline constexpr int RocketBlastDamage = 20;
 
@@ -107,6 +123,16 @@ namespace GameData
 	inline constexpr float GunnerCooldownMultiplier = 2.0f;
 	inline constexpr float GunnerFirstShotDelaySeconds = 100 / OriginalUpdatesPerSecond;
 	inline constexpr float GunnerReloadSeconds = 300 / OriginalUpdatesPerSecond;
+	inline constexpr float EnemySpawnSeconds = 2.0f;
+	inline constexpr float BatDetectionRange = 600.0f;
+	inline constexpr float BatFuseSeconds = 0.5f;
+	inline constexpr float BansheeWindupSeconds = 0.4f;
+	inline constexpr int ContactDamage = 5;
+	// Client/Effect.h의 CEffect 값
+	enum EffectKind : std::uint8_t
+	{
+		EFFECT_BANSHEE_START = 6, EFFECT_BANSHEE_LOOP = 7, EFFECT_BAT_EXPLOSION = 8
+	};
 	inline constexpr float BatBlastRadius = 100.0f;
 	inline constexpr float BombsheWaveMaxRadius = 100.0f;
 	inline constexpr float BombsheWaveGrowthPerSecond = 1.0f * OriginalUpdatesPerSecond;

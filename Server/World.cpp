@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -23,6 +24,21 @@ namespace
 		for (const auto& tile : map.blockedTiles)
 			if (CollisionCheck::RectRect(pos, size, tile.pos, tile.size))
 				return true;
+		return false;
+	}
+
+	bool InSwordArc(Vector2D<float> center, float angle, Vector2D<float> pos, Vector2D<float> size)
+	{
+		const float radians = angle * static_cast<float>(M_PI / 180.0);
+		const Vector2D<float> forward(std::cos(radians), std::sin(radians));
+		const float limit = std::cos(GameData::SwordHalfAngleDegrees * static_cast<float>(M_PI / 180.0));
+		for (float x : { -size.x, size.x })
+			for (float y : { -size.y, size.y }) {
+				const auto offset = pos + Vector2D<float>(x, y) - center;
+				const float distance = std::hypot(offset.x, offset.y);
+				if (distance <= GameData::SwordRange && forward.Dot(offset) >= distance * limit)
+					return true;
+			}
 		return false;
 	}
 }
@@ -72,8 +88,12 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 	events.clear();
 	stage = phase = 1;
 	tick = 0;
+	nextBulletId = 0;
+	nextEnemyId = 0;
+	spawnedStage = spawnedPhase = 0;
 	portalOpen = false;
 	portalPos = {};
+	SpawnWave();
 	return true;
 }
 
@@ -86,6 +106,13 @@ void World::Tick(float deltaTime)
 	UpdatePlayers(deltaTime);
 	UpdateBullets(deltaTime);
 	ResolveCollisions();
+	for (auto& player : players)
+		if (player.used && player.swordPending && player.swordTime <= 0)
+			SwordSlash(player);
+	// [S10] 벽에 막힌 최종 위치에서 발사하고 다음 틱부터 총알을 이동한다.
+	for (auto& player : players)
+		if (player.used && player.attackRequested)
+			player.TryFire(*this);
 	UpdateEnemies(deltaTime);
 	if (boss && boss->active)
 		boss->Update(deltaTime, *this);
@@ -105,13 +132,64 @@ void World::UpdatePlayers(float deltaTime)
 
 Bullet* World::SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir)
 {
-	// [S10] World::SpawnBullet: 총알 ID 발급, 종류별 상태 설정, 총알 생성 이벤트 준비
+	// [S10] World::SpawnBullet: 활성 총알과 겹치지 않는 ID를 발급한다.
+	if (stage == 0 || type >= std::size(GameData::Bullets) ||
+		(side != GameData::BULLET_SIDE_PLAYER && side != GameData::BULLET_SIDE_ENEMY) ||
+		!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(dir.x) || !std::isfinite(dir.y))
+		return nullptr;
+	if (type != GameData::BULLET_BOSS_ORBIT && dir.x == 0 && dir.y == 0)
+		return nullptr;
+	for (std::uint32_t attempt = 0; attempt <= std::numeric_limits<std::uint16_t>::max(); ++attempt) {
+		const auto id = nextBulletId++;
+		if (std::any_of(bullets.begin(), bullets.end(), [id](const auto& bullet) {
+			return bullet->active && bullet->id == id;
+		}))
+			continue;
+		auto bullet = std::make_unique<Bullet>();
+		bullet->active = true;
+		bullet->id = id;
+		bullet->type = type;
+		bullet->side = side;
+		bullet->pos = bullet->lastPos = pos;
+		bullet->dir = dir;
+		bullet->orbitCenter = dir;
+		const auto& stats = GameData::Bullets[type];
+		bullet->damage = stats.damage;
+		bullet->radius = stats.radius;
+		bullet->speedPerSecond = stats.speedPerSecond;
+		auto* result = bullet.get();
+		bullets.push_back(std::move(bullet));
+		S2C_BULLET_SPAWN_PACKET packet{};
+		packet.type = S2C_BULLET_SPAWN;
+		packet.count = 1;
+		packet.size = static_cast<UINT16>(offsetof(S2C_BULLET_SPAWN_PACKET, bullets) + sizeof(BulletSpawn));
+		packet.bullets[0] = { id, type, side, pos.x, pos.y, dir.x, dir.y };
+		PushEvent(&packet, packet.size);
+		return result;
+	}
 	return nullptr;
 }
 
 void World::UpdateBullets(float deltaTime)
 {
-	// [S10] World::UpdateBullets: 총알 이동, 이동 구간을 나눠 벽 통과 방지
+	// [S10] World::UpdateBullets: 원작의 초당 속도로 직선·회전 이동한다.
+	for (auto& bullet : bullets) {
+		if (!bullet->active)
+			continue;
+		if (!bullet->firstUpdate)
+			bullet->lastPos = bullet->pos;
+		bullet->firstUpdate = false;
+		if (bullet->type == GameData::BULLET_BOSS_ORBIT) {
+			bullet->stepRotationDegrees = std::min(GameData::OrbitBulletDegreesPerSecond * deltaTime,
+				600.0f - bullet->rotationDegrees);
+			bullet->pos = (bullet->pos - bullet->orbitCenter).Rotate(bullet->stepRotationDegrees) + bullet->orbitCenter;
+			bullet->rotationDegrees += bullet->stepRotationDegrees;
+		} else {
+			const double length = std::hypot(static_cast<double>(bullet->dir.x), static_cast<double>(bullet->dir.y));
+			const Vector2D<float> direction(static_cast<float>(bullet->dir.x / length), static_cast<float>(bullet->dir.y / length));
+			bullet->pos += direction * (bullet->speedPerSecond * deltaTime);
+		}
+	}
 }
 
 void World::ResolveCollisions()
@@ -135,28 +213,307 @@ void World::ResolveCollisions()
 		}
 		player.pos = resolved;
 	}
+	// [S10] 총알 경로를 4픽셀 이하로 나눠 벽과 작은 대상을 검사한다.
+	for (auto& bullet : bullets) {
+		if (!bullet->active)
+			continue;
+		const bool orbit = bullet->type == GameData::BULLET_BOSS_ORBIT;
+		const auto movement = bullet->pos - bullet->lastPos;
+		const auto radiusVector = bullet->lastPos - bullet->orbitCenter;
+		const float distance = orbit ? std::hypot(radiusVector.x, radiusVector.y) *
+			bullet->stepRotationDegrees * static_cast<float>(M_PI / 180.0) : std::hypot(movement.x, movement.y);
+		const int steps = std::max(1, static_cast<int>(std::ceil(distance / 4.0f)));
+		std::array<bool, MAX_PLAYERS> hitPlayers{};
+		bool hit = false;
+		for (int step = 0; step <= steps; ++step) {
+			const float ratio = static_cast<float>(step) / steps;
+			auto position = bullet->lastPos + movement * ratio;
+			if (orbit) {
+				auto offset = radiusVector;
+				position = offset.Rotate(bullet->stepRotationDegrees * ratio) + bullet->orbitCenter;
+			}
+			if (!orbit && (position.x < 0 || position.y < 0 ||
+				position.x >= TileMap::Columns * TileMap::TileExtent || position.y >= TileMap::Rows * TileMap::TileExtent)) {
+				bullet->pos = position;
+				bullet->active = false;
+				break;
+			}
+			if (HitBulletTarget(*bullet, position, hitPlayers)) {
+				hit = true;
+				if (!orbit) {
+					bullet->pos = position;
+					bullet->active = false;
+					break;
+				}
+			}
+		}
+		if (orbit && bullet->rotationDegrees >= 600.0f)
+			bullet->active = false;
+		if (bullet->active)
+			continue;
+		if (hit && bullet->type == GameData::BULLET_ROCKET) {
+			const Vector2D<float> blastSize(GameData::RocketBlastRadius, GameData::RocketBlastRadius);
+			for (auto& enemy : enemies)
+				if (enemy->active && enemy->hp > 0 && CollisionCheck::CircleRect(bullet->pos, blastSize, enemy->pos, enemy->size))
+					DamageEnemy(*enemy, GameData::RocketBlastDamage);
+		}
+		S2C_BULLET_REMOVE_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.type = S2C_BULLET_REMOVE;
+		packet.id = bullet->id;
+		packet.hit = hit ? 1 : 0;
+		packet.x = bullet->pos.x;
+		packet.y = bullet->pos.y;
+		PushEvent(&packet, sizeof(packet));
+	}
+	std::erase_if(bullets, [](const auto& bullet) { return !bullet->active; });
+}
 
+bool World::HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::array<bool, MAX_PLAYERS>& hitPlayers)
+{
+	const Vector2D<float> size(bullet.radius, bullet.radius);
+	if (bullet.type != GameData::BULLET_BOSS_ORBIT)
+		for (const auto& tile : map.blockedTiles)
+			if (tile.type == TileMap::WallType && CollisionCheck::CircleRect(pos, size, tile.pos, tile.size))
+				return true;
+	if (bullet.side == GameData::BULLET_SIDE_PLAYER) {
+		for (auto& enemy : enemies) {
+			if (!enemy->active || enemy->hp <= 0 || enemy->spawnTime > 0 ||
+				(enemy->type == GameData::EnemyKind::Bat && enemy->attackStarted))
+				continue;
+			const bool overlap = enemy->type == GameData::EnemyKind::Bat ?
+				CollisionCheck::CircleCircle(pos, size, enemy->pos, enemy->size) :
+				CollisionCheck::CircleRect(pos, size, enemy->pos, enemy->size);
+			if (overlap) {
+				DamageEnemy(*enemy, bullet.damage);
+				return true;
+			}
+		}
+		if (boss && boss->active && boss->hp > 0 &&
+			CollisionCheck::CircleCircle(pos, size, boss->pos, { boss->radius, boss->radius })) {
+			boss->hp = static_cast<std::int16_t>(std::max(0, boss->hp - bullet.damage));
+			return true;
+		}
+		return false;
+	}
+	bool hit = false;
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		auto& player = players[id];
+		if (hitPlayers[id] || !player.used || player.hp <= 0 || player.rollTime > 0 || player.invulnerableTime > 0)
+			continue;
+		if (CollisionCheck::RectCircle(player.pos, player.size, pos, size)) {
+			DamagePlayer(player, bullet.damage);
+			hitPlayers[id] = hit = true;
+			if (bullet.type != GameData::BULLET_BOSS_ORBIT)
+				break;
+		}
+	}
+	return hit;
 }
 
 void World::SwordSlash(ServerPlayer& player)
 {
-	// [S10] World::SwordSlash: 칼 공격 범위 판정, 기사 총알 반사
+	// [S10] World::SwordSlash: 원작처럼 대상의 모서리로 부채꼴 범위를 검사한다.
+	player.swordPending = false;
+	if (!player.used || player.hp <= 0)
+		return;
+	const auto center = player.pos + Vector2D<float>(std::abs(player.swordAngle) < 90 ? 18.0f : -17.0f, 8.0f);
+	for (auto& enemy : enemies)
+		if (enemy->active && enemy->hp > 0 && enemy->spawnTime <= 0 &&
+			!(enemy->type == GameData::EnemyKind::Bat && enemy->attackStarted) &&
+			InSwordArc(center, player.swordAngle, enemy->pos, enemy->size))
+			DamageEnemy(*enemy, GameData::SwordDamage);
+	if (boss && boss->active && boss->hp > 0 &&
+		InSwordArc(center, player.swordAngle, boss->pos, { boss->radius, boss->radius }))
+		boss->hp = static_cast<std::int16_t>(std::max(0, boss->hp - GameData::SwordDamage));
+	for (auto& bullet : bullets) {
+		if (!bullet->active || bullet->side != GameData::BULLET_SIDE_ENEMY ||
+			bullet->type == GameData::BULLET_BOSS_ORBIT || bullet->type == GameData::BULLET_BOSS_RADIAL ||
+			!InSwordArc(center, player.swordAngle, bullet->pos, { bullet->radius, bullet->radius }))
+			continue;
+		S2C_BULLET_REMOVE_PACKET removed{};
+		removed.size = sizeof(removed);
+		removed.type = S2C_BULLET_REMOVE;
+		removed.id = bullet->id;
+		removed.x = bullet->pos.x;
+		removed.y = bullet->pos.y;
+		PushEvent(&removed, sizeof(removed));
+		if (player.charType != CHAR_KNIGHT) {
+			bullet->active = false;
+			continue;
+		}
+		// 반사는 같은 ID의 제거·생성을 보내 클라이언트 방향도 교체한다.
+		const auto aim = player.aimPos - center;
+		const float length = std::hypot(aim.x, aim.y);
+		const float radians = player.swordAngle * static_cast<float>(M_PI / 180.0);
+		bullet->dir = (length > 0 ? aim / length : Vector2D<float>(std::cos(radians), std::sin(radians))) * 10.0f;
+		bullet->type = bullet->type == GameData::BULLET_BOSS_AIMED ? GameData::BULLET_BOSS_REFLECTED : GameData::BULLET_BOUNCE;
+		bullet->side = GameData::BULLET_SIDE_PLAYER;
+		bullet->speedPerSecond = GameData::Bullets[bullet->type].speedPerSecond;
+		bullet->lastPos = bullet->pos;
+		bullet->firstUpdate = false;
+		S2C_BULLET_SPAWN_PACKET spawn{};
+		spawn.type = S2C_BULLET_SPAWN;
+		spawn.count = 1;
+		spawn.size = static_cast<UINT16>(offsetof(S2C_BULLET_SPAWN_PACKET, bullets) + sizeof(BulletSpawn));
+		spawn.bullets[0] = { bullet->id, bullet->type, bullet->side, bullet->pos.x, bullet->pos.y, bullet->dir.x, bullet->dir.y };
+		PushEvent(&spawn, spawn.size);
+	}
+	std::erase_if(bullets, [](const auto& bullet) { return !bullet->active; });
 }
 
 void World::DamagePlayer(ServerPlayer& player, int damage)
 {
-	// [S10] World::DamagePlayer: 플레이어 피격, 사망 처리
+	// [S10] World::DamagePlayer: 원작 체력은 피해량과 관계없이 한 칸씩 감소한다.
+	if (!player.used || player.hp <= 0 || damage <= 0 || player.rollTime > 0 || player.invulnerableTime > 0)
+		return;
+	--player.hp;
+	player.state = player.hp > 0 ? GameData::PLAYER_DAMAGED : GameData::PLAYER_DEAD;
+	player.invulnerableTime = player.hp > 0 ? GameData::PlayerInvulnerableSeconds : 0;
+	if (player.hp == 0) {
+		player.attackRequested = player.interactRequested = player.swordPending = false;
+		player.rollTime = 0;
+	}
+	S2C_PLAYER_EVENT_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_PLAYER_EVENT;
+	packet.playerId = player.playerId;
+	packet.event = player.hp > 0 ? PE_HIT : PE_DEAD;
+	packet.value = static_cast<UINT8>(player.hp);
+	PushEvent(&packet, sizeof(packet));
 }
 
 void World::UpdateEnemies(float deltaTime)
 {
-	// [S11] World::UpdateEnemies: 적 타깃 선택, Behavior Tree 실행, 이동
+	// [S11] World::UpdateEnemies: 생성 대기 후 타깃·BT·이동·공격을 갱신한다.
+	for (auto& pointer : enemies) {
+		auto& enemy = *pointer;
+		if (!enemy.active || enemy.hp <= 0)
+			continue;
+		const float activeTime = std::max(0.0f, deltaTime - enemy.spawnTime);
+		enemy.spawnTime = std::max(0.0f, enemy.spawnTime - deltaTime);
+		if (activeTime <= 0)
+			continue;
+		enemy.lastPos = enemy.pos;
+		enemy.attackCooldown = std::max(0.0f, enemy.attackCooldown - activeTime);
+		enemy.moveTime = std::max(0.0f, enemy.moveTime - activeTime);
+		const auto* target = FindNearestPlayer(enemy.pos);
+		enemy.targetPlayerId = target ? target->playerId : -1;
+		if (target) {
+			const auto offset = target->pos - enemy.pos;
+			enemy.angle = static_cast<float>(std::atan2(offset.y, offset.x) * 180.0 / M_PI);
+		} else
+			enemy.dir = {};
+		if (enemy.tree)
+			enemy.tree->Tick(*this, enemy, activeTime);
+
+		if (enemy.type == GameData::EnemyKind::Bat && enemy.attackStarted) {
+			enemy.actionTime = std::max(0.0f, enemy.actionTime - activeTime);
+			if (enemy.actionTime <= 0) {
+				const Vector2D<float> radius(GameData::BatBlastRadius, GameData::BatBlastRadius);
+				for (auto& player : players)
+					if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
+						DamagePlayer(player, GameData::ContactDamage);
+				enemy.hp = 0;
+				enemy.active = false;
+				S2C_ENEMY_DEAD_PACKET dead{};
+				dead.size = sizeof(dead);
+				dead.type = S2C_ENEMY_DEAD;
+				dead.id = enemy.id;
+				PushEvent(&dead, sizeof(dead));
+				S2C_EFFECT_PACKET effect{};
+				effect.size = sizeof(effect);
+				effect.PacketHeader::type = S2C_EFFECT;
+				effect.S2C_EFFECT_PACKET::type = GameData::EFFECT_BAT_EXPLOSION;
+				effect.x = enemy.pos.x;
+				effect.y = enemy.pos.y;
+				PushEvent(&effect, sizeof(effect));
+			}
+			continue;
+		}
+		if (enemy.type == GameData::EnemyKind::Bombshe && enemy.attackStarted) {
+			enemy.actionTime += activeTime;
+			enemy.waveRadius = std::min(GameData::BombsheWaveMaxRadius, enemy.actionTime * GameData::BombsheWaveGrowthPerSecond);
+			if (enemy.actionTime >= GameData::BansheeWindupSeconds) {
+				enemy.waveEffectTime -= activeTime;
+				if (!enemy.waveActive || enemy.waveEffectTime <= 0) {
+					S2C_EFFECT_PACKET effect{};
+					effect.size = sizeof(effect);
+					effect.PacketHeader::type = S2C_EFFECT;
+					effect.S2C_EFFECT_PACKET::type = enemy.waveActive ? GameData::EFFECT_BANSHEE_LOOP : GameData::EFFECT_BANSHEE_START;
+					effect.x = enemy.pos.x;
+					effect.y = enemy.pos.y;
+					PushEvent(&effect, sizeof(effect));
+					enemy.waveEffectTime = enemy.waveActive ? 0.4f : 1.0f;
+					enemy.waveActive = true;
+				}
+				const Vector2D<float> radius(enemy.waveRadius, enemy.waveRadius);
+				for (auto& player : players)
+					if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
+						DamagePlayer(player, GameData::ContactDamage);
+			}
+		}
+
+		// 박쥐는 물 위를 날고, 나머지 적은 벽과 물을 모두 피한다.
+		const bool bat = enemy.type == GameData::EnemyKind::Bat;
+		auto blocked = [&](Vector2D<float> pos) {
+			if (pos.x - enemy.size.x < 0 || pos.y - enemy.size.y < 0 ||
+				pos.x + enemy.size.x > TileMap::Columns * TileMap::TileExtent ||
+				pos.y + enemy.size.y > TileMap::Rows * TileMap::TileExtent)
+				return true;
+			for (const auto& tile : map.blockedTiles) {
+				if (bat && tile.type == TileMap::WaterType)
+					continue;
+				if (bat ? CollisionCheck::CircleRect(pos, enemy.size, tile.pos, tile.size) :
+					CollisionCheck::RectRect(pos, enemy.size, tile.pos, tile.size))
+					return true;
+			}
+			return false;
+		};
+		const auto movement = enemy.dir * (enemy.moveSpeedPerSecond * activeTime);
+		const float distance = std::max(std::abs(movement.x), std::abs(movement.y));
+		const int steps = std::max(1, static_cast<int>(std::ceil(distance / 4.0f)));
+		const auto step = movement / static_cast<float>(steps);
+		for (int i = 0; i < steps; ++i) {
+			const auto horizontal = enemy.pos + Vector2D<float>(step.x, 0);
+			if (!blocked(horizontal))
+				enemy.pos.x = horizontal.x;
+			const auto vertical = enemy.pos + Vector2D<float>(0, step.y);
+			if (!blocked(vertical))
+				enemy.pos.y = vertical.y;
+		}
+		for (auto& player : players) {
+			if (!player.used || player.hp <= 0)
+				continue;
+			const bool overlap = bat ? CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, enemy.size) :
+				CollisionCheck::RectRect(player.pos, player.size, enemy.pos, enemy.size);
+			if (!overlap)
+				continue;
+			DamagePlayer(player, GameData::ContactDamage);
+			enemy.pos = enemy.lastPos;
+			if (!IsPlayerBlocked(map, player.lastPos, player.size))
+				player.pos = player.lastPos;
+		}
+	}
 }
 
-ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
+const ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
 {
-	// [S11] World::FindNearestPlayer: 가장 가까운 생존 플레이어 찾기
-	return nullptr;
+	// [S11] World::FindNearestPlayer: 거리 제곱으로 생존 플레이어를 고른다.
+	const ServerPlayer* nearest = nullptr;
+	double nearestDistance = std::numeric_limits<double>::max();
+	for (const auto& player : players) {
+		if (!player.used || player.hp <= 0)
+			continue;
+		const double x = static_cast<double>(player.pos.x) - pos.x;
+		const double y = static_cast<double>(player.pos.y) - pos.y;
+		const double distance = x * x + y * y;
+		if (distance < nearestDistance) {
+			nearestDistance = distance;
+			nearest = &player;
+		}
+	}
+	return nearest;
 }
 
 void World::DamageEnemy(ServerEnemy& enemy, int damage)
@@ -166,7 +523,51 @@ void World::DamageEnemy(ServerEnemy& enemy, int damage)
 
 void World::SpawnWave()
 {
-	// [S12] World::SpawnWave: 현재 스테이지·웨이브 표대로 적 생성
+	// [S12] World::SpawnWave: 같은 웨이브를 중복 생성하지 않는다.
+	if (stage < 1 || stage > 3 || phase < 1 || phase > 3 ||
+		(spawnedStage == stage && spawnedPhase == phase))
+		return;
+	const auto wave = GameData::StageWaves[stage - 1][phase - 1];
+	const auto activeCount = std::count_if(enemies.begin(), enemies.end(), [](const auto& enemy) { return enemy->active; });
+	if (activeCount + wave.size() > MAX_ENEMIES)
+		return;
+	for (const auto& spawn : wave) {
+		std::uint16_t id = nextEnemyId++;
+		while (std::any_of(enemies.begin(), enemies.end(), [id](const auto& enemy) { return enemy->active && enemy->id == id; }))
+			id = nextEnemyId++;
+		const auto& stats = GameData::Enemies[static_cast<std::size_t>(spawn.kind)];
+		auto enemy = std::make_unique<ServerEnemy>();
+		enemy->active = true;
+		enemy->id = id;
+		enemy->type = spawn.kind;
+		enemy->hp = static_cast<std::int16_t>(stats.hp);
+		enemy->pos = enemy->lastPos = { spawn.position.x, spawn.position.y };
+		enemy->size = { stats.halfWidth, stats.halfHeight };
+		enemy->moveSpeedPerSecond = stats.moveSpeedPerSecond;
+		enemy->attackRange = stats.attackRange;
+		enemy->spawnTime = GameData::EnemySpawnSeconds;
+		if (spawn.kind <= GameData::EnemyKind::Shotgunman) {
+			enemy->weapon = static_cast<std::uint8_t>(spawn.kind) + WEAPON_PISTOL;
+			enemy->ammo = GameData::Weapons[enemy->weapon].maxAmmo / GameData::GunnerAmmoDivisor;
+			enemy->attackCooldown = GameData::GunnerFirstShotDelaySeconds;
+			enemy->moveTime = 200 / GameData::OriginalUpdatesPerSecond;
+			enemy->tree = BuildGunnerTree();
+		} else if (spawn.kind == GameData::EnemyKind::Bat)
+			enemy->tree = BuildBatTree();
+		else
+			enemy->tree = BuildBansheeTree();
+		enemies.push_back(std::move(enemy));
+		S2C_ENEMY_SPAWN_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.PacketHeader::type = S2C_ENEMY_SPAWN;
+		packet.id = id;
+		packet.S2C_ENEMY_SPAWN_PACKET::type = static_cast<EnemyType>(spawn.kind);
+		packet.x = spawn.position.x;
+		packet.y = spawn.position.y;
+		PushEvent(&packet, sizeof(packet));
+	}
+	spawnedStage = stage;
+	spawnedPhase = phase;
 }
 
 void World::UpdateStage()
