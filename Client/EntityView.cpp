@@ -58,6 +58,58 @@ namespace {
 			LoadAnimation(sheets[BROCKET], L"resources/Bullet_Rocket.png", 5, 3);
 		}
 	};
+
+	struct EnemySprites
+	{
+		Animation spawn{};
+		Animation gunner[3][4][4]{};
+		Animation bat[2]{};
+		Animation banshee[4][3]{};
+
+		EnemySprites()
+		{
+			LoadAnimation(spawn, L"resources/Enemy_Spawn.png", 17, 0.5f);
+			// 앞, 오른쪽, 왼쪽, 뒤 순서
+			const wchar_t* const names[3][4][4] = {
+				{
+					{ L"pistol_right", L"pistol_right", L"pistol_left", L"pistol_back" },
+					{ L"pistol_run_front", L"pistol_run_right", L"pistol_run_left", L"pistol_run_back" },
+					{ L"pistol_damaged_front", L"pistol_damaged_right", L"pistol_damaged_left", L"pistol_damaged_front" },
+					{ L"pistol_dead_front", L"pistol_dead_front", L"pistol_dead_front", L"pistol_dead_back" },
+				},
+				{
+					{ L"rifle_right", L"rifle_right", L"rifle_left", L"rifle_back" },
+					{ L"rifle_run_front", L"rifle_run_front_right", L"rifle_run_front_left", L"rifle_run_back" },
+					{ L"rifle_damaged_front", L"rifle_damaged_right", L"rifle_damaged_left", L"rifle_damaged_front" },
+					{ L"rifle_dead_front", L"rifle_dead_front", L"rifle_dead_front", L"rifle_dead_back" },
+				},
+				{
+					{ L"shotgun_front", L"shotgun_front", L"shotgun_front", L"shotgun_back" },
+					{ L"shotgun_run_front", L"shotgun_run_right", L"shotgun_run_left", L"shotgun_run_back" },
+					{ L"shotgun_damaged_front", L"shotgun_damaged_right", L"shotgun_damaged_left", L"shotgun_damaged_front" },
+					{ L"shotgun_dead", L"shotgun_dead", L"shotgun_dead", L"shotgun_dead" },
+				},
+			};
+			for (int type = 0; type < 3; ++type) {
+				const int frames[] = { 2, 6, 2, type == ENEMY_SHOTGUNMAN ? 3 : 5 };
+				for (int state = 0; state < 4; ++state) {
+					for (int dir = 0; dir < 4; ++dir) {
+						const auto path = std::wstring(L"resources/enemy_") + names[type][state][dir] + L".png";
+						LoadAnimation(gunner[type][state][dir], path.c_str(), frames[state],
+							state == STATE_DAMAGED ? 3.0f : 2.0f);
+					}
+				}
+			}
+			LoadAnimation(bat[0], L"resources/bat.png", 6, 2);
+			LoadAnimation(bat[1], L"resources/bat_damaged.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT], L"resources/Bombshe_front.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT_RIGHT], L"resources/Bombshe_right.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT_LEFT], L"resources/Bombshe_left.png", 4, 2);
+			LoadAnimation(banshee[STATE_RUN][FRONT], L"resources/Bombshe_attack.png", 5, 2);
+			LoadAnimation(banshee[STATE_DAMAGED][FRONT], L"resources/Bombshe_damaged.png", 1, 8);
+			LoadAnimation(banshee[STATE_DEAD][FRONT], L"resources/Bombshe_dead.png", 2, 3);
+		}
+	};
 }
 
 Vector2D<float> EntityView::Interpolate(float alpha) const
@@ -155,12 +207,55 @@ void PlayerView::draw(HDC dc)
 
 void EnemyView::update()
 {
-	// [C5] update: 적 애니메이션 갱신
+	if (!hasPosition || !hasType || finished)
+		return;
+	if (!dying)
+		renderPosition = Interpolate(interpolation);
+
+	static const EnemySprites sprites;
+	const float elapsed = static_cast<float>(frame_time);
+	if (!dying && spawnTime > 0) {
+		spawnTime = (std::max)(0.0f, spawnTime - elapsed);
+		if (spawnTime > 0) {
+			animation = &sprites.spawn;
+			frame = sprites.spawn.frame * (1 - spawnTime / GameData::EnemySpawnSeconds);
+			return;
+		}
+	}
+
+	const float angle = snapshot.angle;
+	const int direction = angle >= 60 && angle <= 120 ? FRONT :
+		angle >= -120 && angle <= -60 ? BACK : std::abs(angle) < 90 ? FRONT_RIGHT : FRONT_LEFT;
+	const int state = dying ? STATE_DEAD : snapshot.state < STATE_DEAD ? snapshot.state : STATE_IDLE;
+	if (type == ENEMY_BAT)
+		animation = &sprites.bat[dying || state != STATE_IDLE ? 1 : 0];
+	else if (type == ENEMY_BOMBSHE)
+		animation = &sprites.banshee[state][state == STATE_IDLE && direction != BACK ? direction : FRONT];
+	else
+		animation = &sprites.gunner[type][state][direction];
+
+	if (animationState != state) {
+		animationState = state;
+		frame = 0.0f;
+	} else {
+		frame += elapsed * animation->velocity * animation->frame;
+	}
+	if (dying)
+		finished = frame >= animation->frame;
+	else if (frame >= animation->frame)
+		frame = std::fmod(frame, static_cast<float>(animation->frame));
 }
 
 void EnemyView::draw(HDC dc)
 {
-	// [C9] draw: 적 그리기
+	if (!animation || finished || animation->resource.IsNull())
+		return;
+	const int width = animation->size.right;
+	const int height = animation->size.bottom;
+	const int x = static_cast<int>(renderPosition.x) - width;
+	const int y = static_cast<int>(renderPosition.y) - (spawnTime > 0 && !dying ? height : height * 2 - 20);
+	const int sourceX = std::clamp(static_cast<int>(frame), 0, animation->frame - 1) * width;
+	animation->resource.Draw(dc, x, y, width * 2, height * 2, sourceX, 0, width, height);
 }
 
 void BossView::update()

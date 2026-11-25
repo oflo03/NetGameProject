@@ -38,11 +38,17 @@ void PlayState::update()
 	std::erase_if(effects, [](const Effect& effect) { return effect.time >= Effect::effect[effect.type].frame; });
 	SoundManager::getInstance()->update();
 
+	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
+	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
+	for (auto& [id, view] : enemyViews) {
+		view.interpolation = alpha;
+		view.update();
+	}
+	std::erase_if(enemyViews, [](const auto& entry) { return entry.second.finished; });
+
 	if (!hasSnapshot)
 		return;
 
-	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
-	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		auto& view = playerViews[i];
 		if (!view.snapshot.used)
@@ -105,19 +111,32 @@ void PlayState::draw()
 	PatBlt(worldDC, 0, 0, worldWidth, worldHeight, BLACKNESS);
 	MapManager::getInstance()->PrintMap(worldDC);
 
-	std::array<PlayerView*, MAX_PLAYERS> visible{};
-	auto end = visible.begin();
+	struct DrawEntry {
+		float y;
+		PlayerView* player;
+		EnemyView* enemy;
+	};
+	std::vector<DrawEntry> visible;
+	visible.reserve(MAX_PLAYERS + enemyViews.size());
 	for (auto& view : playerViews) {
 		const auto& pos = view.renderPosition;
-		if (view.snapshot.used && pos.x >= 0 && pos.x <= worldWidth &&
-			pos.y >= 0 && pos.y <= worldHeight)
-			*end++ = &view;
+		if (view.snapshot.used && IsEffectPosition(pos.x, pos.y))
+			visible.push_back({ pos.y, &view, nullptr });
 	}
-	std::stable_sort(visible.begin(), end, [](const PlayerView* a, const PlayerView* b) {
-		return a->renderPosition.y < b->renderPosition.y;
+	for (auto& [id, view] : enemyViews) {
+		const auto& pos = view.renderPosition;
+		if (view.hasType && IsEffectPosition(pos.x, pos.y))
+			visible.push_back({ pos.y, nullptr, &view });
+	}
+	std::stable_sort(visible.begin(), visible.end(), [](const DrawEntry& a, const DrawEntry& b) {
+		return a.y < b.y;
 	});
-	for (auto it = visible.begin(); it != end; ++it)
-		(*it)->draw(worldDC);
+	for (const auto& entry : visible) {
+		if (entry.player)
+			entry.player->draw(worldDC);
+		else
+			entry.enemy->draw(worldDC);
+	}
 	for (auto& bullet : bulletViews)
 		bullet.second.draw(worldDC);
 	for (auto& effect : effects)
@@ -263,7 +282,7 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 		view.snapshot = packet.players[i];
 	}
 	for (auto it = enemyViews.begin(); it != enemyViews.end(); ) {
-		if (!ids.contains(it->first))
+		if (!it->second.dying && !ids.contains(it->first))
 			it = enemyViews.erase(it);
 		else
 			++it;
@@ -271,6 +290,8 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 	for (int i = 0; i < packet.enemyCount; ++i) {
 		const auto& enemy = packet.enemies[i];
 		auto& view = enemyViews[enemy.id];
+		if (view.dying)
+			continue;
 		move(view, enemy.x, enemy.y);
 		view.snapshot = enemy;
 	}
@@ -336,12 +357,34 @@ void PlayState::OnBulletRemove(const S2C_BULLET_REMOVE_PACKET& packet)
 
 void PlayState::OnEnemySpawn(const S2C_ENEMY_SPAWN_PACKET& packet)
 {
-	// [C6] OnEnemySpawn: 적 등장 연출
+	if (packet.type > ENEMY_BOMBSHE || !IsEffectPosition(packet.x, packet.y))
+		return;
+	auto& view = enemyViews[packet.id];
+	if (view.hasType && !view.dying)
+		return;
+	if (view.dying)
+		view = {};
+
+	view.type = packet.type;
+	view.hasType = true;
+	view.spawnTime = GameData::EnemySpawnSeconds;
+	if (!view.hasPosition) {
+		view.snapshot.id = packet.id;
+		view.previousPosition = view.currentPosition = { packet.x, packet.y };
+		view.hasPosition = true;
+	}
+	view.renderPosition = view.currentPosition;
 }
 
 void PlayState::OnEnemyDead(const S2C_ENEMY_DEAD_PACKET& packet)
 {
-	// [C6] OnEnemyDead: 적 사망 연출
+	const auto it = enemyViews.find(packet.id);
+	if (it == enemyViews.end() || !it->second.hasType || it->second.dying)
+		return;
+	it->second.dying = true;
+	it->second.spawnTime = 0.0f;
+	it->second.animationState = -1;
+	SoundManager::getInstance()->play(ENEMYDEATH);
 }
 
 void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
@@ -395,7 +438,20 @@ void PlayState::OnDrop(const S2C_DROP_PACKET& packet)
 
 void PlayState::OnEffect(const S2C_EFFECT_PACKET& packet)
 {
-	// [C6] OnEffect: 이펙트와 사운드 재생
+	static_assert(GameData::EFFECT_BANSHEE_START == static_cast<int>(BOMBSHE1));
+	static_assert(GameData::EFFECT_BANSHEE_LOOP == static_cast<int>(BOMBSHE2));
+	static_assert(GameData::EFFECT_BAT_EXPLOSION == static_cast<int>(BATDIE));
+	if (packet.type >= EFFECT_AMOUNT || !IsEffectPosition(packet.x, packet.y))
+		return;
+
+	const auto type = static_cast<CEffect>(packet.type);
+	AddEffect(type, { packet.x, packet.y });
+	switch (type) {
+	case PATTERNA: SoundManager::getInstance()->play(BOSSLAZOR); break;
+	case PATTERNB: SoundManager::getInstance()->play(BOSSLIGHTNING); break;
+	case PATTERND: SoundManager::getInstance()->play(BOSSCHARGING); break;
+	default: break;
+	}
 }
 
 void PlayState::OnBoss(const S2C_BOSS_PACKET& packet)
