@@ -11,7 +11,14 @@ class ServerPlayer;
 class ServerEnemy;
 class Bullet;
 class ServerBoss;
-struct ServerDrop;
+struct ServerDrop
+{
+	std::uint16_t id = 0;
+	std::uint8_t type = 0;	// 원작 DROP 값
+	Vector2D<float> pos;
+	Vector2D<float> size;
+	bool active = true;
+};
 
 // 게임 로직 스레드만 접근하는 월드
 class World
@@ -20,7 +27,7 @@ private:
 	std::array<ServerPlayer, MAX_PLAYERS> players{};	// 인덱스는 playerId
 	std::vector<std::unique_ptr<ServerEnemy>> enemies;
 	std::vector<std::unique_ptr<Bullet>> bullets;
-	std::vector<ServerDrop*> drops;
+	std::vector<ServerDrop> drops;
 	std::unique_ptr<ServerBoss> boss;
 	TileMap map;
 	int stage = 0;
@@ -28,12 +35,15 @@ private:
 	std::uint32_t tick = 0;
 	std::uint16_t nextBulletId = 0;
 	std::uint16_t nextEnemyId = 0;
+	std::uint16_t nextDropId = 0;
 	int spawnedStage = 0;
 	int spawnedPhase = 0;
 	bool portalOpen = false;
 	Vector2D<float> portalPos;
+	std::array<bool, MAX_PLAYERS> portalReady{};
 	std::vector<std::vector<char>> events;	// 이번 틱의 Protocol.h 이벤트 패킷 바이트
 	bool HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::array<bool, MAX_PLAYERS>& hitPlayers);
+	void FinishEnemyDeath(ServerEnemy& enemy);
 
 public:
 	World();

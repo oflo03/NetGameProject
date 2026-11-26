@@ -64,6 +64,7 @@ namespace GameData
 	inline constexpr float SwordHalfAngleDegrees = 60.0f;
 	inline constexpr float SwordWindupSeconds = 4.0f / (4.0f * 8.0f);
 	inline constexpr float PlayerInvulnerableSeconds = 1.0f;
+	inline constexpr float PortalUseRange = 100.0f;
 	inline constexpr float RocketBlastRadius = 100.0f;
 	inline constexpr int RocketBlastDamage = 20;
 
@@ -147,6 +148,10 @@ namespace GameData
 		{ 1633, 256 }, { 960, 900 }, { 960, 540 }, { 960, 540 },
 	};
 	inline constexpr MapPosition BossSpawn{ 960, 500 };
+	// 원작 드랍 이미지 크기가 충돌 박스의 절반 크기다.
+	inline constexpr MapPosition DropHalfSizes[] = {
+		{ 17, 17 }, { 17, 17 }, { 17, 28 }, { 20, 29 }
+	};
 
 	struct EnemySpawn
 	{
