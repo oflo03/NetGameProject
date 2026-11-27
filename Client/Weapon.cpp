@@ -1,4 +1,5 @@
 #include "Weapon.h"
+#include <algorithm>
 #include <string>
 #include "Player.h"
 #include "Boss.h"
@@ -136,32 +137,7 @@ void Sword::draw_weapon(HDC mDC, const Vector2D<float>& center, const Vector2D<f
 		rotatedImage.Destroy();
 	}
 	else {
-		int width = slash.size.right;
-		int height = slash.size.bottom;
-		CImage temp;
-		CImage rotatedImage;
-		rotatedImage.Create(width, height, 32);
-		temp.Create(width, height, 32);
-		for (int y = 0; y < height; y++) {
-			for (int x = 0; x < width; x++) {
-				BYTE* srcPixel = (BYTE*)slash.resource.GetPixelAddress((int)frame * width + x, y);
-				BYTE* destPixel = (BYTE*)temp.GetPixelAddress(x, y);
-				memcpy(destPixel, srcPixel, sizeof(BYTE) * 4);
-			}
-		}
-		for (int y = 0; y < height; y++) {
-			for (int x = 0; x < width; x++) {
-				Vector2D<float> rotatedPos = (Vector2D<float>(x - width / 2, y - height / 2)).Rotate(angle) + Vector2D<float>(width / 2, height / 2);
-				if (rotatedPos.x >= 0 && rotatedPos.x < width && rotatedPos.y >= 0 && rotatedPos.y < height) {
-					BYTE* srcPixel = (BYTE*)temp.GetPixelAddress(rotatedPos.x, rotatedPos.y);
-					BYTE* destPixel = (BYTE*)rotatedImage.GetPixelAddress(x, y);
-					memcpy(destPixel, srcPixel, sizeof(BYTE) * 4);
-				}
-			}
-		}
-		rotatedImage.TransparentBlt(mDC, center.x - slash.size.right, center.y - slash.size.bottom, slash.size.right * 2, slash.size.bottom * 2,
-			0, 0, slash.size.right, slash.size.bottom, RGB(0, 0, 0)
-		);
+		draw_swing(mDC, center, static_cast<float>(-angle), frame / slash.frame);
 		if (lookRange)
 		{
 			Vector2D<float> lineP1 = Vector2D<float>(cos(-angle * M_PI / 180) * attackRange, sin(-angle * M_PI / 180) * attackRange);
@@ -179,9 +155,36 @@ void Sword::draw_weapon(HDC mDC, const Vector2D<float>& center, const Vector2D<f
 				center.x + lineP2.x, center.y + lineP2.y, center.x + lineP1.x, center.y + lineP1.y);
 			SelectObject(mDC, old);
 		}
-		rotatedImage.Destroy();
-		temp.Destroy();
 	}
+}
+
+void Sword::draw_swing(HDC mDC, const Vector2D<float>& center, float aimAngle, float progress)
+{
+	if (slash.resource.IsNull())
+		return;
+	const int width = slash.size.right;
+	const int height = slash.size.bottom;
+	const int sourceX = std::clamp(static_cast<int>(progress * slash.frame), 0, slash.frame - 1) * width;
+	const float radians = aimAngle * static_cast<float>(M_PI / 180.0);
+	const float cosine = std::cos(radians);
+	const float sine = std::sin(radians);
+	CImage rotated;
+	if (!rotated.Create(width, height, 32))
+		return;
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			const int dx = x - width / 2;
+			const int dy = y - height / 2;
+			const float sx = dx * cosine + dy * sine + width / 2;
+			const float sy = dy * cosine - dx * sine + height / 2;
+			auto* pixel = static_cast<DWORD*>(rotated.GetPixelAddress(x, y));
+			*pixel = sx >= 0 && sx < width && sy >= 0 && sy < height ?
+				*static_cast<const DWORD*>(slash.resource.GetPixelAddress(
+					sourceX + static_cast<int>(sx), static_cast<int>(sy))) : 0;
+		}
+	}
+	rotated.TransparentBlt(mDC, static_cast<int>(center.x) - width, static_cast<int>(center.y) - height,
+		width * 2, height * 2, RGB(0, 0, 0));
 }
 
 // ---- 총기 ----

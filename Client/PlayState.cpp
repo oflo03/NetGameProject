@@ -65,9 +65,6 @@ void PlayState::update()
 		view.update();
 	}
 	UpdateCamera();
-	for (const auto& event : playerEvents)
-		OnPlayerEvent(event);
-	playerEvents.clear();
 }
 
 void PlayState::UpdateCamera()
@@ -183,10 +180,8 @@ void PlayState::draw()
 
 	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS && playerViews[localPlayerId].snapshot.used)
 		UI::getInstance()->draw(mDC, playerViews[localPlayerId].snapshot);
-	const HWND window = GetActiveWindow();
-	POINT point = mPoint;
-	if (window && ScreenToClient(window, &point) && !cursor.IsNull())
-		cursor.Draw(mDC, point.x - 20, point.y - 30, 40, 40);
+	if (PtInRect(&screen, mPoint) && !cursor.IsNull())
+		cursor.Draw(mDC, mPoint.x - 20, mPoint.y - 30, 40, 40);
 }
 
 void PlayState::process_packet(const PacketHeader* packet)
@@ -233,7 +228,16 @@ void PlayState::process_packet(const PacketHeader* packet)
 	case S2C_BULLET_REMOVE: dispatch(&PlayState::OnBulletRemove); break;
 	case S2C_ENEMY_SPAWN: dispatch(&PlayState::OnEnemySpawn); break;
 	case S2C_ENEMY_DEAD: dispatch(&PlayState::OnEnemyDead); break;
-	case S2C_PLAYER_EVENT: dispatch(&PlayState::OnPlayerEvent); break;
+	case S2C_PLAYER_EVENT:
+		if (packet->size == sizeof(S2C_PLAYER_EVENT_PACKET)) {
+			S2C_PLAYER_EVENT_PACKET event{};
+			std::memcpy(&event, packet, sizeof(event));
+			if (event.event == PE_SWORD)
+				playerEvents.push_back(event);
+			else
+				OnPlayerEvent(event);
+		}
+		break;
 	case S2C_DROP: dispatch(&PlayState::OnDrop); break;
 	case S2C_EFFECT: dispatch(&PlayState::OnEffect); break;
 	case S2C_BOSS: dispatch(&PlayState::OnBoss); break;
@@ -309,6 +313,10 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 	snapshotTick = packet.tick;
 	snapshotReceivedAt = GetTickCount64();
 	hasSnapshot = true;
+	// 서버는 같은 틱의 이벤트를 스냅샷보다 먼저 보낸다.
+	for (const auto& event : playerEvents)
+		OnPlayerEvent(event);
+	playerEvents.clear();
 }
 
 void PlayState::OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet)
@@ -401,7 +409,7 @@ void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 		playerEvents.push_back(packet);
 		return;
 	}
-	const auto& view = playerViews[packet.playerId];
+	auto& view = playerViews[packet.playerId];
 	if (!view.hasPosition)
 		return;
 	const auto position = view.currentPosition;
@@ -415,7 +423,7 @@ void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 		sound->play(PLAYER_DEATH);
 		break;
 	case PE_SWORD:
-		AddEffect(SWORDATTACK, position);
+		view.StartSwordSwing();
 		sound->play(SWORD_ATK);
 		break;
 	case PE_PICKUP:
@@ -531,12 +539,9 @@ void PlayState::SampleInput()
 	interactPending |= interact && !interactHeld;
 	interactHeld = interact;
 
-	POINT point = mPoint;
-	if (ScreenToClient(window, &point)) {
-		const auto aim = ScreenToWorld(point);
-		input.aimX = aim.x;
-		input.aimY = aim.y;
-	}
+	const auto aim = ScreenToWorld(mPoint);
+	input.aimX = aim.x;
+	input.aimY = aim.y;
 }
 
 Vector2D<float> PlayState::ScreenToWorld(POINT point) const

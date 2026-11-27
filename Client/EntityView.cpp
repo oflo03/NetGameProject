@@ -7,6 +7,8 @@
 #include <string>
 
 namespace {
+	constexpr float swordSwingDuration = 0.25f;
+
 	struct PlayerSprites
 	{
 		Animation body[STATE_ROLL + 1][6]{};
@@ -139,7 +141,10 @@ void PlayerView::update()
 		return;
 
 	renderPosition = Interpolate(interpolation);
-	const float angle = snapshot.angle;
+	const float elapsed = static_cast<float>(frame_time);
+	if (swordSwingTime > 0.0f)
+		swordSwingTime = (std::max)(0.0f, swordSwingTime - elapsed);
+	const float angle = snapshot.weapon == WEAPON_SWORD && swordSwingTime > 0.0f ? swordSwingAngle : snapshot.angle;
 	if (angle >= -20 && angle <= 60) direction = FRONT_RIGHT;
 	else if (angle > 60 && angle <= 120) direction = FRONT;
 	else if (angle > 120 || angle < -160) direction = FRONT_LEFT;
@@ -150,17 +155,27 @@ void PlayerView::update()
 	int state = snapshot.state;
 	if (snapshot.hp == 0 || state == STATE_DEAD)
 		state = STATE_DEAD;
-	else if (state != STATE_RUN && state != STATE_ROLL)
-		state = STATE_IDLE;
+	else if (state != STATE_RUN && state != STATE_ROLL) {
+		const auto movement = currentPosition - previousPosition;
+		state = std::abs(movement.x) > 0.001f || std::abs(movement.y) > 0.001f ? STATE_RUN : STATE_IDLE;
+	}
 
 	const Animation& anim = GetPlayerSprites(charType).body[state][direction];
 	if (animationState != state) {
 		animationState = state;
 		animationFrame = 0.0f;
 	}
-	animationFrame += static_cast<float>(frame_time) * anim.velocity * anim.frame;
-	if (animationFrame >= anim.frame)
-		animationFrame = state == STATE_DEAD ? static_cast<float>(anim.frame - 1) : 0.0f;
+	animationFrame += elapsed * anim.velocity * anim.frame;
+	if (state == STATE_DEAD)
+		animationFrame = (std::min)(animationFrame, static_cast<float>(anim.frame - 1));
+	else if (animationFrame >= anim.frame)
+		animationFrame = std::fmod(animationFrame, static_cast<float>(anim.frame));
+}
+
+void PlayerView::StartSwordSwing()
+{
+	swordSwingTime = swordSwingDuration;
+	swordSwingAngle = snapshot.angle;
 }
 
 void PlayerView::draw(HDC dc)
@@ -179,6 +194,8 @@ void PlayerView::draw(HDC dc)
 	const int height = anim.size.bottom;
 	const int top = y - height * 2 + 20;
 	const bool showHand = animationState != STATE_ROLL && animationState != STATE_DEAD;
+	const bool swinging = snapshot.weapon == WEAPON_SWORD && swordSwingTime > 0.0f;
+	const float weaponAngle = swinging ? swordSwingAngle : snapshot.angle;
 	const bool front = direction == FRONT || direction == FRONT_LEFT || direction == FRONT_RIGHT;
 	const auto drawHand = [&] {
 		static Sword sword;
@@ -187,10 +204,12 @@ void PlayerView::draw(HDC dc)
 		static Shotgun shotgun;
 		static Rocket rocket;
 		Weapon* const weapons[] = { &sword, &pistol, &rifle, &shotgun, &rocket };
-		const float radians = snapshot.angle * static_cast<float>(M_PI / 180.0);
-		const Vector2D<float> center(renderPosition.x + (std::abs(snapshot.angle) < 90 ? 18 : -17),
+		const float radians = weaponAngle * static_cast<float>(M_PI / 180.0);
+		const Vector2D<float> center(renderPosition.x + (std::abs(weaponAngle) < 90 ? 18 : -17),
 			renderPosition.y + 8);
-		if (snapshot.weapon < WEAPON_COUNT) {
+		if (swinging) {
+			sword.draw_swing(dc, center, weaponAngle, 1.0f - swordSwingTime / swordSwingDuration);
+		} else if (snapshot.weapon < WEAPON_COUNT) {
 			const Vector2D<float> aim = center + Vector2D<float>(std::cos(radians), std::sin(radians)) * 100.0f;
 			weapons[snapshot.weapon]->draw_weapon(dc, center, aim);
 		}
@@ -239,7 +258,12 @@ void EnemyView::update()
 	const float angle = snapshot.angle;
 	const int direction = angle >= 60 && angle <= 120 ? FRONT :
 		angle >= -120 && angle <= -60 ? BACK : std::abs(angle) < 90 ? FRONT_RIGHT : FRONT_LEFT;
-	const int state = dying ? STATE_DEAD : snapshot.state < STATE_DEAD ? snapshot.state : STATE_IDLE;
+	int state = dying ? STATE_DEAD : snapshot.state < STATE_DEAD ? snapshot.state : STATE_IDLE;
+	if (type <= ENEMY_SHOTGUNMAN && state == STATE_IDLE) {
+		const auto movement = currentPosition - previousPosition;
+		if (std::abs(movement.x) > 0.001f || std::abs(movement.y) > 0.001f)
+			state = STATE_RUN;
+	}
 	if (type == ENEMY_BAT)
 		animation = &sprites.bat[dying || state != STATE_IDLE ? 1 : 0];
 	else if (type == ENEMY_BOMBSHE)

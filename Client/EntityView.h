@@ -26,6 +26,10 @@ private:
 	int animationState = STATE_IDLE;
 	DIRECTION direction = FRONT;
 	float animationFrame = 0.0f;
+	float swordSwingTime = 0.0f;
+	float swordSwingAngle = 0.0f;
+
+	void StartSwordSwing();
 
 public:
 	void update();
