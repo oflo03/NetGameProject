@@ -10,7 +10,8 @@
 
 std::ifstream& operator>>(std::ifstream& is, Tile& tile)
 {
-	is >> tile.type, is >> tile.tilePos;
+	if (!(is >> tile.type >> tile.tilePos))
+		return is;
 	switch (tile.type)
 	{
 	case wall_t:
@@ -49,26 +50,40 @@ MapManager* MapManager::getInstance()
 	return instance;
 }
 
-void MapManager::LoadTileMap(int stage, bool createColliders)
+bool MapManager::LoadTileMap(int stage, bool createColliders)
 {
 	if (stage < 1 || stage > 4)
-		return;
-	currentStage = stage;
+		return false;
 	std::ifstream mapFile("resources/map" + std::to_string(stage) + ".txt");
 	if (!mapFile)
-		return;
+		return false;
+	if (!createColliders) {
+		// 맵을 끝까지 읽은 뒤 현재 타일을 교체한다.
+		struct TileData { int type; int index; };
+		TileData tiles[MapHeight][MapWidth];
+		for (auto& row : tiles)
+			for (auto& tile : row)
+				if (!(mapFile >> tile.type >> tile.index))
+					return false;
+		for (int i = 0; i < MapHeight; ++i)
+			for (int j = 0; j < MapWidth; ++j) {
+				Maps[i][j].type = tiles[i][j].type;
+				Maps[i][j].tilePos = tiles[i][j].index;
+			}
+		currentStage = stage;
+		return true;
+	}
 	for (int i = 0; i < MapHeight; ++i)
 		for (int j = 0; j < MapWidth; ++j)
 		{
 			auto& tile = Maps[i][j];
-			if (!createColliders) {
-				mapFile >> tile.type >> tile.tilePos;
-				continue;
-			}
-			mapFile >> tile;
+			if (!(mapFile >> tile))
+				return false;
 			if (tile.type == wall_t || tile.type == poke_water)
 				tile.col->pos = Vector2D<float>(j * PTS + TileSize, i * PTS + TileSize);
 		}
+	currentStage = stage;
+	return true;
 }
 
 void MapManager::PrintMap(HDC mDC)
@@ -136,11 +151,18 @@ void Portal::update()
 
 void Portal::handle_event()
 {
-	if ((GetAsyncKeyState('E') & 0x8000) && (Player::getInstance()->GetPos() - pos).GetLenth() < 100)
+	if ((GetAsyncKeyState('E') & 0x8000) && (Player::getInstance()->GetPos() - pos).GetLenth() < UseRange)
 		LevelManager::getInstance()->loadNextStage();
 }
 
 void Portal::Draw(HDC mDC)
+{
+	const bool showHint = (camPos - pos).GetLenth() < UseRange;
+	const auto hintPosition = showHint ? Player::getInstance()->GetPos() : pos;
+	Draw(mDC, showHint ? &hintPosition : nullptr);
+}
+
+void Portal::Draw(HDC mDC, const Vector2D<float>* hintPosition)
 {
 	portal.resource.Draw(mDC, pos.x - portal.size.right, pos.y - portal.size.bottom - 50, portal.size.right * 2, portal.size.bottom * 2,
 		(int)pframe * portal.size.right, 0, portal.size.right, portal.size.bottom);
@@ -149,8 +171,8 @@ void Portal::Draw(HDC mDC)
 		P.resource.Draw(mDC, camPos.x + (pos - camPos).Normalize().x * camSize.x / 1.1 - P.size.right / 2,
 			camPos.y + (pos - camPos).Normalize().y * camSize.y / 1.1 - P.size.bottom / 2, P.size.right, P.size.bottom,
 			(int)eframe * P.size.right, 0, P.size.right, P.size.bottom);
-	if ((camPos - pos).GetLenth() < 100)
-		E.resource.Draw(mDC, Player::getInstance()->GetPos().x - E.size.right / 2, Player::getInstance()->GetPos().y - E.size.bottom - 30, E.size.right, E.size.bottom,
+	if (hintPosition)
+		E.resource.Draw(mDC, hintPosition->x - E.size.right / 2, hintPosition->y - E.size.bottom - 30, E.size.right, E.size.bottom,
 			(int)eframe * E.size.right, 0, E.size.right, E.size.bottom);
 }
 

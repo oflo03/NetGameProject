@@ -41,7 +41,7 @@ private:
 	MapManager();
 public:
 	static MapManager* getInstance();
-	void LoadTileMap(int stage, bool createColliders = true);	// resources/map{stage}.txt
+	bool LoadTileMap(int stage, bool createColliders = true);	// resources/map{stage}.txt
 	void PrintMap(HDC mDC);
 };
 
@@ -56,6 +56,7 @@ protected:
 	Vector2D<float> pos;
 	Portal(float x, float y);
 public:
+	static constexpr float UseRange = 100.0f;
 	Vector2D<float> GetPos() { return pos; };
 	static Portal* getInstance();
 	static void release();
@@ -63,6 +64,7 @@ public:
 	void update();
 	void handle_event();
 	void Draw(HDC mDC);
+	void Draw(HDC mDC, const Vector2D<float>* hintPosition);
 };
 
 // ---- 스테이지 진행: stage 1~4 (4 = 보스), 각 stage는 phase 1~3 웨이브 ----

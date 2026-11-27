@@ -26,6 +26,10 @@ private:
 	int animationState = STATE_IDLE;
 	DIRECTION direction = FRONT;
 	float animationFrame = 0.0f;
+	float swordSwingTime = 0.0f;
+	float swordSwingAngle = 0.0f;
+
+	void StartSwordSwing();
 
 public:
 	void update();
@@ -37,6 +41,16 @@ class EnemyView : public EntityView
 	friend class PlayState;
 private:
 	EnemySnap snapshot{};
+	EnemyType type = ENEMY_PISTOLMAN;
+	bool hasType = false;
+	bool dying = false;
+	bool finished = false;
+	float spawnTime = 0.0f;
+	float interpolation = 1.0f;
+	float frame = 0.0f;
+	int animationState = -1;
+	Vector2D<float> renderPosition{};
+	const Animation* animation = nullptr;
 
 public:
 	void update();
@@ -74,5 +88,6 @@ private:
 	S2C_DROP_PACKET drop{};
 
 public:
+	explicit DropView(const S2C_DROP_PACKET& packet) : drop(packet) {}
 	void draw(HDC dc);
 };

@@ -25,7 +25,8 @@ namespace {
 PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
 	: localPlayerId(localPlayerId), roomInfo(roomInfo)
 {
-	MapManager::getInstance()->LoadTileMap(1, false);
+	if (MapManager::getInstance()->LoadTileMap(1, false))
+		stage = 1;
 	camPos = { worldWidth / 2.0f, worldHeight / 2.0f };
 }
 
@@ -33,16 +34,24 @@ void PlayState::update()
 {
 	for (auto& bullet : bulletViews)
 		bullet.second.update();
+	if (portalVisible)
+		Portal::getInstance()->update();
 	for (auto& effect : effects)
 		effect.update();
 	std::erase_if(effects, [](const Effect& effect) { return effect.time >= Effect::effect[effect.type].frame; });
 	SoundManager::getInstance()->update();
 
+	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
+	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
+	for (auto& [id, view] : enemyViews) {
+		view.interpolation = alpha;
+		view.update();
+	}
+	std::erase_if(enemyViews, [](const auto& entry) { return entry.second.finished; });
+
 	if (!hasSnapshot)
 		return;
 
-	const float elapsed = static_cast<float>(GetTickCount64() - snapshotReceivedAt);
-	const float alpha = (std::min)(elapsed / GameData::LogicIntervalMs, 1.0f);
 	for (int i = 0; i < MAX_PLAYERS; ++i) {
 		auto& view = playerViews[i];
 		if (!view.snapshot.used)
@@ -56,9 +65,6 @@ void PlayState::update()
 		view.update();
 	}
 	UpdateCamera();
-	for (const auto& event : playerEvents)
-		OnPlayerEvent(event);
-	playerEvents.clear();
 }
 
 void PlayState::UpdateCamera()
@@ -104,20 +110,47 @@ void PlayState::draw()
 	const auto previousBitmap = SelectObject(worldDC, worldBitmap);
 	PatBlt(worldDC, 0, 0, worldWidth, worldHeight, BLACKNESS);
 	MapManager::getInstance()->PrintMap(worldDC);
+	for (auto& [id, view] : dropViews)
+		view.draw(worldDC);
+	if (portalVisible) {
+		auto* portal = Portal::getInstance();
+		const int id = localPlayerId >= 0 ? localPlayerId : NetworkManager::getInstance()->playerId;
+		const Vector2D<float>* hintPosition = nullptr;
+		if (id >= 0 && id < MAX_PLAYERS) {
+			const auto& view = playerViews[id];
+			if (view.snapshot.used && view.snapshot.hp > 0 &&
+				(view.renderPosition - portal->GetPos()).GetLenth() < Portal::UseRange)
+				hintPosition = &view.renderPosition;
+		}
+		portal->Draw(worldDC, hintPosition);
+	}
 
-	std::array<PlayerView*, MAX_PLAYERS> visible{};
-	auto end = visible.begin();
+	struct DrawEntry {
+		float y;
+		PlayerView* player;
+		EnemyView* enemy;
+	};
+	std::vector<DrawEntry> visible;
+	visible.reserve(MAX_PLAYERS + enemyViews.size());
 	for (auto& view : playerViews) {
 		const auto& pos = view.renderPosition;
-		if (view.snapshot.used && pos.x >= 0 && pos.x <= worldWidth &&
-			pos.y >= 0 && pos.y <= worldHeight)
-			*end++ = &view;
+		if (view.snapshot.used && IsEffectPosition(pos.x, pos.y))
+			visible.push_back({ pos.y, &view, nullptr });
 	}
-	std::stable_sort(visible.begin(), end, [](const PlayerView* a, const PlayerView* b) {
-		return a->renderPosition.y < b->renderPosition.y;
+	for (auto& [id, view] : enemyViews) {
+		const auto& pos = view.renderPosition;
+		if (view.hasType && IsEffectPosition(pos.x, pos.y))
+			visible.push_back({ pos.y, nullptr, &view });
+	}
+	std::stable_sort(visible.begin(), visible.end(), [](const DrawEntry& a, const DrawEntry& b) {
+		return a.y < b.y;
 	});
-	for (auto it = visible.begin(); it != end; ++it)
-		(*it)->draw(worldDC);
+	for (const auto& entry : visible) {
+		if (entry.player)
+			entry.player->draw(worldDC);
+		else
+			entry.enemy->draw(worldDC);
+	}
 	for (auto& bullet : bulletViews)
 		bullet.second.draw(worldDC);
 	for (auto& effect : effects)
@@ -147,10 +180,8 @@ void PlayState::draw()
 
 	if (localPlayerId >= 0 && localPlayerId < MAX_PLAYERS && playerViews[localPlayerId].snapshot.used)
 		UI::getInstance()->draw(mDC, playerViews[localPlayerId].snapshot);
-	const HWND window = GetActiveWindow();
-	POINT point = mPoint;
-	if (window && ScreenToClient(window, &point) && !cursor.IsNull())
-		cursor.Draw(mDC, point.x - 20, point.y - 30, 40, 40);
+	if (PtInRect(&screen, mPoint) && !cursor.IsNull())
+		cursor.Draw(mDC, mPoint.x - 20, mPoint.y - 30, 40, 40);
 }
 
 void PlayState::process_packet(const PacketHeader* packet)
@@ -197,23 +228,21 @@ void PlayState::process_packet(const PacketHeader* packet)
 	case S2C_BULLET_REMOVE: dispatch(&PlayState::OnBulletRemove); break;
 	case S2C_ENEMY_SPAWN: dispatch(&PlayState::OnEnemySpawn); break;
 	case S2C_ENEMY_DEAD: dispatch(&PlayState::OnEnemyDead); break;
-	case S2C_PLAYER_EVENT: dispatch(&PlayState::OnPlayerEvent); break;
+	case S2C_PLAYER_EVENT:
+		if (packet->size == sizeof(S2C_PLAYER_EVENT_PACKET)) {
+			S2C_PLAYER_EVENT_PACKET event{};
+			std::memcpy(&event, packet, sizeof(event));
+			if (event.event == PE_SWORD)
+				playerEvents.push_back(event);
+			else
+				OnPlayerEvent(event);
+		}
+		break;
 	case S2C_DROP: dispatch(&PlayState::OnDrop); break;
 	case S2C_EFFECT: dispatch(&PlayState::OnEffect); break;
 	case S2C_BOSS: dispatch(&PlayState::OnBoss); break;
 	case S2C_PORTAL: dispatch(&PlayState::OnPortal); break;
-	case S2C_STAGE_LOAD:
-		if (packet->size == sizeof(S2C_STAGE_LOAD_PACKET)) {
-			playerViews = {};
-			enemyViews.clear();
-			bossView = {};
-			bulletViews.clear();
-			effects.clear();
-			playerEvents.clear();
-			hasSnapshot = false;
-			dispatch(&PlayState::OnStageLoad);
-		}
-		break;
+	case S2C_STAGE_LOAD: dispatch(&PlayState::OnStageLoad); break;
 	default:
 		break;
 	}
@@ -263,7 +292,7 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 		view.snapshot = packet.players[i];
 	}
 	for (auto it = enemyViews.begin(); it != enemyViews.end(); ) {
-		if (!ids.contains(it->first))
+		if (!it->second.dying && !ids.contains(it->first))
 			it = enemyViews.erase(it);
 		else
 			++it;
@@ -271,6 +300,8 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 	for (int i = 0; i < packet.enemyCount; ++i) {
 		const auto& enemy = packet.enemies[i];
 		auto& view = enemyViews[enemy.id];
+		if (view.dying)
+			continue;
 		move(view, enemy.x, enemy.y);
 		view.snapshot = enemy;
 	}
@@ -282,6 +313,10 @@ void PlayState::OnSnapshot(const S2C_SNAPSHOT_PACKET& packet)
 	snapshotTick = packet.tick;
 	snapshotReceivedAt = GetTickCount64();
 	hasSnapshot = true;
+	// 서버는 같은 틱의 이벤트를 스냅샷보다 먼저 보낸다.
+	for (const auto& event : playerEvents)
+		OnPlayerEvent(event);
+	playerEvents.clear();
 }
 
 void PlayState::OnBulletSpawn(const S2C_BULLET_SPAWN_PACKET& packet)
@@ -336,12 +371,34 @@ void PlayState::OnBulletRemove(const S2C_BULLET_REMOVE_PACKET& packet)
 
 void PlayState::OnEnemySpawn(const S2C_ENEMY_SPAWN_PACKET& packet)
 {
-	// [C6] OnEnemySpawn: 적 등장 연출
+	if (packet.type > ENEMY_BOMBSHE || !IsEffectPosition(packet.x, packet.y))
+		return;
+	auto& view = enemyViews[packet.id];
+	if (view.hasType && !view.dying)
+		return;
+	if (view.dying)
+		view = {};
+
+	view.type = packet.type;
+	view.hasType = true;
+	view.spawnTime = GameData::EnemySpawnSeconds;
+	if (!view.hasPosition) {
+		view.snapshot.id = packet.id;
+		view.previousPosition = view.currentPosition = { packet.x, packet.y };
+		view.hasPosition = true;
+	}
+	view.renderPosition = view.currentPosition;
 }
 
 void PlayState::OnEnemyDead(const S2C_ENEMY_DEAD_PACKET& packet)
 {
-	// [C6] OnEnemyDead: 적 사망 연출
+	const auto it = enemyViews.find(packet.id);
+	if (it == enemyViews.end() || !it->second.hasType || it->second.dying)
+		return;
+	it->second.dying = true;
+	it->second.spawnTime = 0.0f;
+	it->second.animationState = -1;
+	SoundManager::getInstance()->play(ENEMYDEATH);
 }
 
 void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
@@ -352,7 +409,7 @@ void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 		playerEvents.push_back(packet);
 		return;
 	}
-	const auto& view = playerViews[packet.playerId];
+	auto& view = playerViews[packet.playerId];
 	if (!view.hasPosition)
 		return;
 	const auto position = view.currentPosition;
@@ -366,7 +423,7 @@ void PlayState::OnPlayerEvent(const S2C_PLAYER_EVENT_PACKET& packet)
 		sound->play(PLAYER_DEATH);
 		break;
 	case PE_SWORD:
-		AddEffect(SWORDATTACK, position);
+		view.StartSwordSwing();
 		sound->play(SWORD_ATK);
 		break;
 	case PE_PICKUP:
@@ -390,12 +447,28 @@ void PlayState::AddEffect(CEffect type, Vector2D<float> position)
 
 void PlayState::OnDrop(const S2C_DROP_PACKET& packet)
 {
-	// [C6] OnDrop: 드랍 아이템 생성·제거
+	if (packet.add == 0)
+		dropViews.erase(packet.id);
+	else if (packet.add == 1 && packet.type <= DROCKET && IsEffectPosition(packet.x, packet.y))
+		dropViews.insert_or_assign(packet.id, DropView(packet));
 }
 
 void PlayState::OnEffect(const S2C_EFFECT_PACKET& packet)
 {
-	// [C6] OnEffect: 이펙트와 사운드 재생
+	static_assert(GameData::EFFECT_BANSHEE_START == static_cast<int>(BOMBSHE1));
+	static_assert(GameData::EFFECT_BANSHEE_LOOP == static_cast<int>(BOMBSHE2));
+	static_assert(GameData::EFFECT_BAT_EXPLOSION == static_cast<int>(BATDIE));
+	if (packet.type >= EFFECT_AMOUNT || !IsEffectPosition(packet.x, packet.y))
+		return;
+
+	const auto type = static_cast<CEffect>(packet.type);
+	AddEffect(type, { packet.x, packet.y });
+	switch (type) {
+	case PATTERNA: SoundManager::getInstance()->play(BOSSLAZOR); break;
+	case PATTERNB: SoundManager::getInstance()->play(BOSSLIGHTNING); break;
+	case PATTERND: SoundManager::getInstance()->play(BOSSCHARGING); break;
+	default: break;
+	}
 }
 
 void PlayState::OnBoss(const S2C_BOSS_PACKET& packet)
@@ -405,12 +478,29 @@ void PlayState::OnBoss(const S2C_BOSS_PACKET& packet)
 
 void PlayState::OnPortal(const S2C_PORTAL_PACKET& packet)
 {
-	// [C6] OnPortal: 포탈 표시
+	if (!IsEffectPosition(packet.x, packet.y))
+		return;
+	Portal::getInstance()->SetPos({ packet.x, packet.y });
+	portalVisible = true;
 }
 
 void PlayState::OnStageLoad(const S2C_STAGE_LOAD_PACKET& packet)
 {
-	// [C6] OnStageLoad: 맵 교체와 보스 컷신
+	if (stage == packet.stage || !MapManager::getInstance()->LoadTileMap(packet.stage, false))
+		return;
+
+	stage = packet.stage;
+	playerViews = {};
+	enemyViews.clear();
+	bossView = {};
+	bulletViews.clear();
+	dropViews.clear();
+	effects.clear();
+	playerEvents.clear();
+	portalVisible = false;
+	hasSnapshot = false;
+	const auto spawn = GameData::PlayerSpawns[stage - 1];
+	camPos = { spawn.x, spawn.y };
 }
 
 void PlayState::SampleInput()
@@ -449,12 +539,9 @@ void PlayState::SampleInput()
 	interactPending |= interact && !interactHeld;
 	interactHeld = interact;
 
-	POINT point = mPoint;
-	if (ScreenToClient(window, &point)) {
-		const auto aim = ScreenToWorld(point);
-		input.aimX = aim.x;
-		input.aimY = aim.y;
-	}
+	const auto aim = ScreenToWorld(mPoint);
+	input.aimX = aim.x;
+	input.aimY = aim.y;
 }
 
 Vector2D<float> PlayState::ScreenToWorld(POINT point) const

@@ -348,10 +348,8 @@ void Player::handle_event()
 
 void Player::update()
 {
-	POINT temp;
-	GetCursorPos(&temp);
-	mPos.x = temp.x;
-	mPos.y = temp.y;
+	mPos.x = mPoint.x;
+	mPos.y = mPoint.y;
 	mPos -= monitorSize / 2;
 	mPos /= 2;
 	mPos += camPos;

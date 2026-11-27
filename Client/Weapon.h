@@ -69,6 +69,7 @@ private:
 public:
 	Sword();
 	~Sword() { slash.resource.Destroy(); }
+	void draw_swing(HDC mDC, const Vector2D<float>& center, float aimAngle, float progress);
 	virtual void update();
 	virtual void attack(const Vector2D<float>& center, const Vector2D<float>& mPos, int side);
 	virtual void draw_weapon(HDC mDC, const Vector2D<float>& center, const Vector2D<float>& mPos);

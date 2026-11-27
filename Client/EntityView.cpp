@@ -7,6 +7,8 @@
 #include <string>
 
 namespace {
+	constexpr float swordSwingDuration = 0.25f;
+
 	struct PlayerSprites
 	{
 		Animation body[STATE_ROLL + 1][6]{};
@@ -58,6 +60,71 @@ namespace {
 			LoadAnimation(sheets[BROCKET], L"resources/Bullet_Rocket.png", 5, 3);
 		}
 	};
+
+	struct EnemySprites
+	{
+		Animation spawn{};
+		Animation gunner[3][4][4]{};
+		Animation bat[2]{};
+		Animation banshee[4][3]{};
+
+		EnemySprites()
+		{
+			LoadAnimation(spawn, L"resources/Enemy_Spawn.png", 17, 0.5f);
+			// 앞, 오른쪽, 왼쪽, 뒤 순서
+			const wchar_t* const names[3][4][4] = {
+				{
+					{ L"pistol_right", L"pistol_right", L"pistol_left", L"pistol_back" },
+					{ L"pistol_run_front", L"pistol_run_right", L"pistol_run_left", L"pistol_run_back" },
+					{ L"pistol_damaged_front", L"pistol_damaged_right", L"pistol_damaged_left", L"pistol_damaged_front" },
+					{ L"pistol_dead_front", L"pistol_dead_front", L"pistol_dead_front", L"pistol_dead_back" },
+				},
+				{
+					{ L"rifle_right", L"rifle_right", L"rifle_left", L"rifle_back" },
+					{ L"rifle_run_front", L"rifle_run_front_right", L"rifle_run_front_left", L"rifle_run_back" },
+					{ L"rifle_damaged_front", L"rifle_damaged_right", L"rifle_damaged_left", L"rifle_damaged_front" },
+					{ L"rifle_dead_front", L"rifle_dead_front", L"rifle_dead_front", L"rifle_dead_back" },
+				},
+				{
+					{ L"shotgun_front", L"shotgun_front", L"shotgun_front", L"shotgun_back" },
+					{ L"shotgun_run_front", L"shotgun_run_right", L"shotgun_run_left", L"shotgun_run_back" },
+					{ L"shotgun_damaged_front", L"shotgun_damaged_right", L"shotgun_damaged_left", L"shotgun_damaged_front" },
+					{ L"shotgun_dead", L"shotgun_dead", L"shotgun_dead", L"shotgun_dead" },
+				},
+			};
+			for (int type = 0; type < 3; ++type) {
+				const int frames[] = { 2, 6, 2, type == ENEMY_SHOTGUNMAN ? 3 : 5 };
+				for (int state = 0; state < 4; ++state) {
+					for (int dir = 0; dir < 4; ++dir) {
+						const auto path = std::wstring(L"resources/enemy_") + names[type][state][dir] + L".png";
+						LoadAnimation(gunner[type][state][dir], path.c_str(), frames[state],
+							state == STATE_DAMAGED ? 3.0f : 2.0f);
+					}
+				}
+			}
+			LoadAnimation(bat[0], L"resources/bat.png", 6, 2);
+			LoadAnimation(bat[1], L"resources/bat_damaged.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT], L"resources/Bombshe_front.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT_RIGHT], L"resources/Bombshe_right.png", 4, 2);
+			LoadAnimation(banshee[STATE_IDLE][FRONT_LEFT], L"resources/Bombshe_left.png", 4, 2);
+			LoadAnimation(banshee[STATE_RUN][FRONT], L"resources/Bombshe_attack.png", 5, 2);
+			LoadAnimation(banshee[STATE_DAMAGED][FRONT], L"resources/Bombshe_damaged.png", 1, 8);
+			LoadAnimation(banshee[STATE_DEAD][FRONT], L"resources/Bombshe_dead.png", 2, 3);
+		}
+	};
+
+	struct DropSprites
+	{
+		CImage items[DROCKET + 1];
+
+		DropSprites()
+		{
+			items[DPISTOL].Load(L"resources/drop_pistol.png");
+			items[DRIFLE].Load(L"resources/drop_rifle.png");
+			items[DSHOTGUN].Load(L"resources/drop_shotgun.png");
+			items[DROCKET].Load(L"resources/drop_rocket.png");
+		}
+	};
 }
 
 Vector2D<float> EntityView::Interpolate(float alpha) const
@@ -74,7 +141,10 @@ void PlayerView::update()
 		return;
 
 	renderPosition = Interpolate(interpolation);
-	const float angle = snapshot.angle;
+	const float elapsed = static_cast<float>(frame_time);
+	if (swordSwingTime > 0.0f)
+		swordSwingTime = (std::max)(0.0f, swordSwingTime - elapsed);
+	const float angle = snapshot.weapon == WEAPON_SWORD && swordSwingTime > 0.0f ? swordSwingAngle : snapshot.angle;
 	if (angle >= -20 && angle <= 60) direction = FRONT_RIGHT;
 	else if (angle > 60 && angle <= 120) direction = FRONT;
 	else if (angle > 120 || angle < -160) direction = FRONT_LEFT;
@@ -85,17 +155,27 @@ void PlayerView::update()
 	int state = snapshot.state;
 	if (snapshot.hp == 0 || state == STATE_DEAD)
 		state = STATE_DEAD;
-	else if (state != STATE_RUN && state != STATE_ROLL)
-		state = STATE_IDLE;
+	else if (state != STATE_RUN && state != STATE_ROLL) {
+		const auto movement = currentPosition - previousPosition;
+		state = std::abs(movement.x) > 0.001f || std::abs(movement.y) > 0.001f ? STATE_RUN : STATE_IDLE;
+	}
 
 	const Animation& anim = GetPlayerSprites(charType).body[state][direction];
 	if (animationState != state) {
 		animationState = state;
 		animationFrame = 0.0f;
 	}
-	animationFrame += static_cast<float>(frame_time) * anim.velocity * anim.frame;
-	if (animationFrame >= anim.frame)
-		animationFrame = state == STATE_DEAD ? static_cast<float>(anim.frame - 1) : 0.0f;
+	animationFrame += elapsed * anim.velocity * anim.frame;
+	if (state == STATE_DEAD)
+		animationFrame = (std::min)(animationFrame, static_cast<float>(anim.frame - 1));
+	else if (animationFrame >= anim.frame)
+		animationFrame = std::fmod(animationFrame, static_cast<float>(anim.frame));
+}
+
+void PlayerView::StartSwordSwing()
+{
+	swordSwingTime = swordSwingDuration;
+	swordSwingAngle = snapshot.angle;
 }
 
 void PlayerView::draw(HDC dc)
@@ -114,6 +194,8 @@ void PlayerView::draw(HDC dc)
 	const int height = anim.size.bottom;
 	const int top = y - height * 2 + 20;
 	const bool showHand = animationState != STATE_ROLL && animationState != STATE_DEAD;
+	const bool swinging = snapshot.weapon == WEAPON_SWORD && swordSwingTime > 0.0f;
+	const float weaponAngle = swinging ? swordSwingAngle : snapshot.angle;
 	const bool front = direction == FRONT || direction == FRONT_LEFT || direction == FRONT_RIGHT;
 	const auto drawHand = [&] {
 		static Sword sword;
@@ -122,10 +204,12 @@ void PlayerView::draw(HDC dc)
 		static Shotgun shotgun;
 		static Rocket rocket;
 		Weapon* const weapons[] = { &sword, &pistol, &rifle, &shotgun, &rocket };
-		const float radians = snapshot.angle * static_cast<float>(M_PI / 180.0);
-		const Vector2D<float> center(renderPosition.x + (std::abs(snapshot.angle) < 90 ? 18 : -17),
+		const float radians = weaponAngle * static_cast<float>(M_PI / 180.0);
+		const Vector2D<float> center(renderPosition.x + (std::abs(weaponAngle) < 90 ? 18 : -17),
 			renderPosition.y + 8);
-		if (snapshot.weapon < WEAPON_COUNT) {
+		if (swinging) {
+			sword.draw_swing(dc, center, weaponAngle, 1.0f - swordSwingTime / swordSwingDuration);
+		} else if (snapshot.weapon < WEAPON_COUNT) {
 			const Vector2D<float> aim = center + Vector2D<float>(std::cos(radians), std::sin(radians)) * 100.0f;
 			weapons[snapshot.weapon]->draw_weapon(dc, center, aim);
 		}
@@ -155,12 +239,60 @@ void PlayerView::draw(HDC dc)
 
 void EnemyView::update()
 {
-	// [C5] update: 적 애니메이션 갱신
+	if (!hasPosition || !hasType || finished)
+		return;
+	if (!dying)
+		renderPosition = Interpolate(interpolation);
+
+	static const EnemySprites sprites;
+	const float elapsed = static_cast<float>(frame_time);
+	if (!dying && spawnTime > 0) {
+		spawnTime = (std::max)(0.0f, spawnTime - elapsed);
+		if (spawnTime > 0) {
+			animation = &sprites.spawn;
+			frame = sprites.spawn.frame * (1 - spawnTime / GameData::EnemySpawnSeconds);
+			return;
+		}
+	}
+
+	const float angle = snapshot.angle;
+	const int direction = angle >= 60 && angle <= 120 ? FRONT :
+		angle >= -120 && angle <= -60 ? BACK : std::abs(angle) < 90 ? FRONT_RIGHT : FRONT_LEFT;
+	int state = dying ? STATE_DEAD : snapshot.state < STATE_DEAD ? snapshot.state : STATE_IDLE;
+	if (type <= ENEMY_SHOTGUNMAN && state == STATE_IDLE) {
+		const auto movement = currentPosition - previousPosition;
+		if (std::abs(movement.x) > 0.001f || std::abs(movement.y) > 0.001f)
+			state = STATE_RUN;
+	}
+	if (type == ENEMY_BAT)
+		animation = &sprites.bat[dying || state != STATE_IDLE ? 1 : 0];
+	else if (type == ENEMY_BOMBSHE)
+		animation = &sprites.banshee[state][state == STATE_IDLE && direction != BACK ? direction : FRONT];
+	else
+		animation = &sprites.gunner[type][state][direction];
+
+	if (animationState != state) {
+		animationState = state;
+		frame = 0.0f;
+	} else {
+		frame += elapsed * animation->velocity * animation->frame;
+	}
+	if (dying)
+		finished = frame >= animation->frame;
+	else if (frame >= animation->frame)
+		frame = std::fmod(frame, static_cast<float>(animation->frame));
 }
 
 void EnemyView::draw(HDC dc)
 {
-	// [C9] draw: 적 그리기
+	if (!animation || finished || animation->resource.IsNull())
+		return;
+	const int width = animation->size.right;
+	const int height = animation->size.bottom;
+	const int x = static_cast<int>(renderPosition.x) - width;
+	const int y = static_cast<int>(renderPosition.y) - (spawnTime > 0 && !dying ? height : height * 2 - 20);
+	const int sourceX = std::clamp(static_cast<int>(frame), 0, animation->frame - 1) * width;
+	animation->resource.Draw(dc, x, y, width * 2, height * 2, sourceX, 0, width, height);
 }
 
 void BossView::update()
@@ -228,5 +360,11 @@ void BulletView::draw(HDC dc)
 
 void DropView::draw(HDC dc)
 {
-	// [C9] draw: 드랍 아이템 그리기
+	static const DropSprites sprites;
+	const auto& image = sprites.items[drop.type];
+	if (!image.IsNull()) {
+		const int width = image.GetWidth();
+		const int height = image.GetHeight();
+		image.Draw(dc, static_cast<int>(drop.x) - width, static_cast<int>(drop.y) - height, width * 2, height * 2);
+	}
 }
