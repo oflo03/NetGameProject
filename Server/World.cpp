@@ -5,6 +5,7 @@
 #include "ServerEnemy.h"
 #include "ServerBoss.h"
 #include "ClientThread.h"
+#include "LogicThread.h"
 #include "GameData.h"
 #include "CollisionCheck.h"
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <random>
 
 namespace
 {
@@ -25,6 +27,17 @@ namespace
 			if (CollisionCheck::RectRect(pos, size, tile.pos, tile.size))
 				return true;
 		return false;
+	}
+
+	void PushEffect(World& world, std::uint8_t type, Vector2D<float> pos)
+	{
+		S2C_EFFECT_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.PacketHeader::type = S2C_EFFECT;
+		packet.type = type;
+		packet.x = pos.x;
+		packet.y = pos.y;
+		world.PushEvent(&packet, sizeof(packet));
 	}
 
 	bool InSwordArc(Vector2D<float> center, float angle, Vector2D<float> pos, Vector2D<float> size)
@@ -88,11 +101,14 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 	events.clear();
 	stage = phase = 1;
 	tick = 0;
+	finished = false;
 	nextBulletId = 0;
 	nextEnemyId = 0;
+	nextDropId = 0;
 	spawnedStage = spawnedPhase = 0;
 	portalOpen = false;
 	portalPos = {};
+	portalReady = {};
 	SpawnWave();
 	return true;
 }
@@ -100,7 +116,10 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 void World::Tick(float deltaTime)
 {
 	// [S9] World::Tick: S10 → S11 → S12 → S13 순서로 고정 틱 실행
-	if (stage == 0)
+	if (stage == 0 || finished)
+		return;
+	RemoveLeftPlayers();
+	if (CheckGameEnd())
 		return;
 	++tick;
 	UpdatePlayers(deltaTime);
@@ -117,7 +136,8 @@ void World::Tick(float deltaTime)
 	if (boss && boss->active)
 		boss->Update(deltaTime, *this);
 	UpdateStage();
-	CheckGameEnd();
+	if (CheckGameEnd())
+		return;
 	FlushEvents();
 	SendSnapshot();
 }
@@ -133,7 +153,7 @@ void World::UpdatePlayers(float deltaTime)
 Bullet* World::SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir)
 {
 	// [S10] World::SpawnBullet: 활성 총알과 겹치지 않는 ID를 발급한다.
-	if (stage == 0 || type >= std::size(GameData::Bullets) ||
+	if (stage == 0 || finished || type >= std::size(GameData::Bullets) ||
 		(side != GameData::BULLET_SIDE_PLAYER && side != GameData::BULLET_SIDE_ENEMY) ||
 		!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(dir.x) || !std::isfinite(dir.y))
 		return nullptr;
@@ -267,6 +287,39 @@ void World::ResolveCollisions()
 		PushEvent(&packet, sizeof(packet));
 	}
 	std::erase_if(bullets, [](const auto& bullet) { return !bullet->active; });
+	// [S10] 드랍 하나는 한 플레이어에게만 지급한다.
+	for (auto& drop : drops) {
+		for (auto& player : players) {
+			if (!drop.active || !player.used || player.hp <= 0 ||
+				!CollisionCheck::RectRect(player.pos, player.size, drop.pos, drop.size))
+				continue;
+			const auto weapon = static_cast<std::uint8_t>(drop.type + WEAPON_PISTOL);
+			const auto maxAmmo = GameData::Weapons[weapon].maxAmmo;
+			if (player.ammo[weapon] >= maxAmmo)
+				continue;
+			player.ammo[weapon] = static_cast<std::uint8_t>(weapon == WEAPON_ROCKET ? player.ammo[weapon] + 1 : maxAmmo);
+			player.weapon = weapon;
+			player.fireCooldown = std::max(player.fireCooldown, GameData::Weapons[weapon].cooldownSeconds - GameData::WeaponSwitchLeadSeconds);
+			drop.active = false;
+			S2C_DROP_PACKET removed{};
+			removed.size = sizeof(removed);
+			removed.PacketHeader::type = S2C_DROP;
+			removed.id = drop.id;
+			removed.type = drop.type;
+			removed.x = drop.pos.x;
+			removed.y = drop.pos.y;
+			PushEvent(&removed, sizeof(removed));
+			S2C_PLAYER_EVENT_PACKET pickup{};
+			pickup.size = sizeof(pickup);
+			pickup.type = S2C_PLAYER_EVENT;
+			pickup.playerId = player.playerId;
+			pickup.event = PE_PICKUP;
+			pickup.value = drop.type;
+			PushEvent(&pickup, sizeof(pickup));
+			break;
+		}
+	}
+	std::erase_if(drops, [](const auto& drop) { return !drop.active; });
 }
 
 bool World::HitBulletTarget(const Bullet& bullet, Vector2D<float> pos, std::array<bool, MAX_PLAYERS>& hitPlayers)
@@ -322,7 +375,10 @@ void World::SwordSlash(ServerPlayer& player)
 		if (enemy->active && enemy->hp > 0 && enemy->spawnTime <= 0 &&
 			!(enemy->type == GameData::EnemyKind::Bat && enemy->attackStarted) &&
 			InSwordArc(center, player.swordAngle, enemy->pos, enemy->size))
+		{
 			DamageEnemy(*enemy, GameData::SwordDamage);
+			PushEffect(*this, 5, enemy->pos); // CEffect::SWORDATTACK
+		}
 	if (boss && boss->active && boss->hp > 0 &&
 		InSwordArc(center, player.swordAngle, boss->pos, { boss->radius, boss->radius }))
 		boss->hp = static_cast<std::int16_t>(std::max(0, boss->hp - GameData::SwordDamage));
@@ -388,8 +444,21 @@ void World::UpdateEnemies(float deltaTime)
 	// [S11] World::UpdateEnemies: 생성 대기 후 타깃·BT·이동·공격을 갱신한다.
 	for (auto& pointer : enemies) {
 		auto& enemy = *pointer;
-		if (!enemy.active || enemy.hp <= 0)
+		if (!enemy.active)
 			continue;
+		if (enemy.hp <= 0) {
+			enemy.deathTime = std::max(0.0f, enemy.deathTime - deltaTime);
+			if (enemy.deathTime <= 0)
+				FinishEnemyDeath(enemy);
+			continue;
+		}
+		if (enemy.hurtTime > 0) {
+			enemy.hurtTime = std::max(0.0f, enemy.hurtTime - deltaTime);
+			if (enemy.hurtTime > 0)
+				continue;
+			enemy.state = enemy.type == GameData::EnemyKind::Bombshe && enemy.attackStarted ? 1 : 0;
+			enemy.moveTime = 0;
+		}
 		const float activeTime = std::max(0.0f, deltaTime - enemy.spawnTime);
 		enemy.spawnTime = std::max(0.0f, enemy.spawnTime - deltaTime);
 		if (activeTime <= 0)
@@ -410,24 +479,8 @@ void World::UpdateEnemies(float deltaTime)
 		if (enemy.type == GameData::EnemyKind::Bat && enemy.attackStarted) {
 			enemy.actionTime = std::max(0.0f, enemy.actionTime - activeTime);
 			if (enemy.actionTime <= 0) {
-				const Vector2D<float> radius(GameData::BatBlastRadius, GameData::BatBlastRadius);
-				for (auto& player : players)
-					if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
-						DamagePlayer(player, GameData::ContactDamage);
 				enemy.hp = 0;
-				enemy.active = false;
-				S2C_ENEMY_DEAD_PACKET dead{};
-				dead.size = sizeof(dead);
-				dead.type = S2C_ENEMY_DEAD;
-				dead.id = enemy.id;
-				PushEvent(&dead, sizeof(dead));
-				S2C_EFFECT_PACKET effect{};
-				effect.size = sizeof(effect);
-				effect.PacketHeader::type = S2C_EFFECT;
-				effect.S2C_EFFECT_PACKET::type = GameData::EFFECT_BAT_EXPLOSION;
-				effect.x = enemy.pos.x;
-				effect.y = enemy.pos.y;
-				PushEvent(&effect, sizeof(effect));
+				FinishEnemyDeath(enemy);
 			}
 			continue;
 		}
@@ -518,7 +571,72 @@ const ServerPlayer* World::FindNearestPlayer(const Vector2D<float>& pos) const
 
 void World::DamageEnemy(ServerEnemy& enemy, int damage)
 {
-	// [S11] World::DamageEnemy: 적 피격, 사망, 드랍 생성
+	// [S11] World::DamageEnemy: 생성·사망 중인 적은 다시 피격되지 않는다.
+	if (!enemy.active || enemy.hp <= 0 || enemy.spawnTime > 0 || damage <= 0 ||
+		(enemy.type == GameData::EnemyKind::Bat && enemy.attackStarted))
+		return;
+	enemy.hp = static_cast<std::int16_t>(std::max(0, enemy.hp - damage));
+	enemy.dir = {};
+	if (enemy.hp > 0) {
+		enemy.state = enemy.type == GameData::EnemyKind::Bat ? 0 : 2;
+		enemy.hurtTime = enemy.type == GameData::EnemyKind::Bat ? 0.0f :
+			enemy.type == GameData::EnemyKind::Bombshe ? 0.125f : 1.0f / 3.0f;
+		return;
+	}
+	enemy.state = enemy.type == GameData::EnemyKind::Bat ? 1 : 3;
+	enemy.deathTime = enemy.type == GameData::EnemyKind::Bombshe ? 1.0f / 3.0f : 0.5f;
+	enemy.waveActive = false;
+	enemy.deathNotified = true;
+	S2C_ENEMY_DEAD_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_ENEMY_DEAD;
+	packet.id = enemy.id;
+	PushEvent(&packet, sizeof(packet));
+}
+
+void World::FinishEnemyDeath(ServerEnemy& enemy)
+{
+	if (!enemy.active)
+		return;
+	enemy.active = false;
+	if (!enemy.deathNotified) {
+		S2C_ENEMY_DEAD_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.type = S2C_ENEMY_DEAD;
+		packet.id = enemy.id;
+		PushEvent(&packet, sizeof(packet));
+		enemy.deathNotified = true;
+	}
+	if (enemy.type == GameData::EnemyKind::Bat) {
+		const Vector2D<float> radius(GameData::BatBlastRadius, GameData::BatBlastRadius);
+		for (auto& player : players)
+			if (player.used && CollisionCheck::RectCircle(player.pos, player.size, enemy.pos, radius))
+				DamagePlayer(player, GameData::ContactDamage);
+		PushEffect(*this, GameData::EFFECT_BAT_EXPLOSION, enemy.pos);
+		return;
+	}
+	if (enemy.type == GameData::EnemyKind::Shotgunman)
+		PushEffect(*this, 10, enemy.pos); // CEffect::SHOTGUNDIE
+	else if (enemy.type == GameData::EnemyKind::Bombshe)
+		PushEffect(*this, 9, enemy.pos); // CEffect::BOMBSHEDIE
+	const int type = GameData::Enemies[static_cast<std::size_t>(enemy.type)].dropType;
+	static thread_local std::mt19937 random(std::random_device{}());
+	if (type < 0 || std::uniform_int_distribution<int>(0, 1)(random) != 0 || drops.size() >= 65536)
+		return;
+	std::uint16_t id = nextDropId++;
+	while (std::any_of(drops.begin(), drops.end(), [id](const auto& drop) { return drop.active && drop.id == id; }))
+		id = nextDropId++;
+	const auto size = GameData::DropHalfSizes[type];
+	drops.push_back({ id, static_cast<std::uint8_t>(type), enemy.pos, { size.x, size.y }, true });
+	S2C_DROP_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.PacketHeader::type = S2C_DROP;
+	packet.id = id;
+	packet.add = 1;
+	packet.type = static_cast<std::uint8_t>(type);
+	packet.x = enemy.pos.x;
+	packet.y = enemy.pos.y;
+	PushEvent(&packet, sizeof(packet));
 }
 
 void World::SpawnWave()
@@ -527,6 +645,7 @@ void World::SpawnWave()
 	if (stage < 1 || stage > 3 || phase < 1 || phase > 3 ||
 		(spawnedStage == stage && spawnedPhase == phase))
 		return;
+	std::erase_if(enemies, [](const auto& enemy) { return !enemy->active; });
 	const auto wave = GameData::StageWaves[stage - 1][phase - 1];
 	const auto activeCount = std::count_if(enemies.begin(), enemies.end(), [](const auto& enemy) { return enemy->active; });
 	if (activeCount + wave.size() > MAX_ENEMIES)
@@ -572,24 +691,188 @@ void World::SpawnWave()
 
 void World::UpdateStage()
 {
-	// [S12] World::UpdateStage: 다음 웨이브, 포탈 열기, 생존자 전원의 E키 상호작용으로 이동 판단
+	// [S12] World::UpdateStage: 사망 연출까지 끝난 뒤 다음 웨이브를 연다.
+	if (stage < 1 || stage > 3 ||
+		!std::any_of(players.begin(), players.end(), [](const auto& player) { return player.used && player.hp > 0; }) ||
+		std::any_of(enemies.begin(), enemies.end(), [](const auto& enemy) { return enemy->active; }))
+		return;
+	if (phase < 3) {
+		++phase;
+		SpawnWave();
+		return;
+	}
+	if (!portalOpen) {
+		portalOpen = true;
+		portalReady = {};
+		const auto pos = GameData::PortalSpawns[stage - 1];
+		portalPos = { pos.x, pos.y };
+		S2C_PORTAL_PACKET packet{};
+		packet.size = sizeof(packet);
+		packet.type = S2C_PORTAL;
+		packet.x = portalPos.x;
+		packet.y = portalPos.y;
+		PushEvent(&packet, sizeof(packet));
+	}
+	bool allReady = true;
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		const auto& player = players[id];
+		if (!player.used || player.hp <= 0) {
+			portalReady[id] = false;
+			continue;
+		}
+		const auto distance = player.pos - portalPos;
+		const bool inPortalRange = std::hypot(distance.x, distance.y) < GameData::PortalUseRange;
+		if (!inPortalRange)
+			portalReady[id] = false;
+		else if (player.interactRequested)
+			portalReady[id] = true;
+		allReady = allReady && inPortalRange && portalReady[id];
+	}
+	if (allReady)
+		LoadStage(stage + 1);
 }
 
 bool World::LoadStage(int nextStage)
 {
-	// [S12] World::LoadStage: 맵 교체, 플레이어 이동·부활, 보스 생성
-	return false;
+	// [S12] World::LoadStage: 맵·배치를 먼저 준비해 실패 시 현재 월드를 유지한다.
+	if (finished || nextStage < 1 || nextStage > 4)
+		return false;
+	TileMap loadedMap;
+	if (!loadedMap.Load(nextStage))
+		return false;
+	auto loadedPlayers = players;
+	std::array<bool, MAX_PLAYERS> placed{};
+	std::array<bool, MAX_PLAYERS> revived{};
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		auto& player = loadedPlayers[id];
+		if (!player.used)
+			continue;
+		const auto spawn = GameData::PlayerSpawns[nextStage - 1];
+		const Vector2D<float> desired(spawn.x + id * GameData::PlayerSpawnSpacing, spawn.y);
+		auto safe = [&](Vector2D<float> pos) {
+			if (IsPlayerBlocked(loadedMap, pos, player.size))
+				return false;
+			for (int other = 0; other < MAX_PLAYERS; ++other)
+				if (placed[other] && CollisionCheck::RectRect(pos, player.size, loadedPlayers[other].pos, loadedPlayers[other].size))
+					return false;
+			return true;
+		};
+		auto position = desired;
+		if (!safe(position)) {
+			double closest = std::numeric_limits<double>::max();
+			for (int row = 0; row < TileMap::Rows; ++row)
+				for (int column = 0; column < TileMap::Columns; ++column) {
+					const Vector2D<float> candidate(static_cast<float>(column * TileMap::TileExtent + TileMap::HalfExtent),
+						static_cast<float>(row * TileMap::TileExtent + TileMap::HalfExtent));
+					const auto offset = candidate - desired;
+					const double distance = static_cast<double>(offset.x) * offset.x + static_cast<double>(offset.y) * offset.y;
+					if (distance < closest && safe(candidate)) {
+						closest = distance;
+						position = candidate;
+					}
+				}
+			if (closest == std::numeric_limits<double>::max())
+				return false;
+		}
+		revived[id] = player.hp <= 0;
+		if (revived[id])
+			player.hp = static_cast<std::int16_t>(GameData::Players[player.charType].hp);
+		player.pos = player.lastPos = position;
+		player.state = GameData::PLAYER_IDLE;
+		player.aimPos = position + Vector2D<float>(1, 0);
+		player.angle = player.swordAngle = 0;
+		player.rollDir = {};
+		player.rollTime = player.fireCooldown = player.swordTime = 0;
+		player.invulnerableTime = revived[id] ? GameData::PlayerInvulnerableSeconds : 0;
+		player.attackRequested = player.interactRequested = player.swordPending = false;
+		placed[id] = true;
+	}
+	std::unique_ptr<ServerBoss> loadedBoss;
+	if (nextStage == 4) {
+		loadedBoss = std::make_unique<ServerBoss>();
+		loadedBoss->active = true;
+		loadedBoss->hp = GameData::BossHp;
+		loadedBoss->radius = GameData::BossRadius;
+		loadedBoss->pos = { GameData::BossSpawn.x, GameData::BossSpawn.y };
+		loadedBoss->handPos = { loadedBoss->pos, loadedBoss->pos };
+	}
+	map = std::move(loadedMap);
+	players = std::move(loadedPlayers);
+	enemies.clear();
+	bullets.clear();
+	drops.clear();
+	boss = std::move(loadedBoss);
+	stage = nextStage;
+	phase = 1;
+	spawnedStage = spawnedPhase = 0;
+	portalOpen = false;
+	portalPos = {};
+	portalReady = {};
+	S2C_STAGE_LOAD_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_STAGE_LOAD;
+	packet.stage = static_cast<UINT8>(stage);
+	PushEvent(&packet, sizeof(packet));
+	for (int id = 0; id < MAX_PLAYERS; ++id)
+		if (revived[id]) {
+			S2C_PLAYER_EVENT_PACKET event{};
+			event.size = sizeof(event);
+			event.type = S2C_PLAYER_EVENT;
+			event.playerId = static_cast<UINT8>(id);
+			event.event = PE_REVIVE;
+			event.value = static_cast<UINT8>(players[id].hp);
+			PushEvent(&event, sizeof(event));
+		}
+	SpawnWave();
+	return true;
 }
 
 bool World::CheckGameEnd()
 {
-	// [S12] World::CheckGameEnd: 클리어·전멸·전원 이탈 판정, EndGame 호출
-	return false;
+	// [S12] World::CheckGameEnd: 전멸·전원 이탈을 먼저 확인하고 보스 클리어를 판정한다.
+	if (finished)
+		return true;
+	if (stage == 0)
+		return false;
+	const bool hasSurvivor = std::any_of(players.begin(), players.end(), [](const auto& player) {
+		return player.used && player.hp > 0;
+	});
+	const bool cleared = stage == 4 && boss && boss->hp <= 0;
+	if (hasSurvivor && !cleared)
+		return false;
+	finished = true;
+	// 마지막 피격·사망 이벤트와 상태는 결과 패킷보다 먼저 전달한다.
+	FlushEvents();
+	SendSnapshot();
+	EndGame(hasSurvivor ? RESULT_CLEAR : RESULT_WIPE);
+	return true;
 }
 
 void World::RemoveLeftPlayers()
 {
-	// [S12] World::RemoveLeftPlayers: room.lock을 잡고 이탈 목록을 꺼낸 뒤 월드의 해당 플레이어 제거
+	// [S12] World::RemoveLeftPlayers: 세션 정보는 잠금 안에서 복사하고 월드는 밖에서 정리한다.
+	std::vector<UINT8> left;
+	std::array<bool, MAX_PLAYERS> connected{};
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		left.swap(room.leftPlayers);
+		for (const auto& session : room.sessions)
+			if (session.used && session.connected && session.playerId >= 0 && session.playerId < MAX_PLAYERS)
+				connected[session.playerId] = true;
+	}
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		if (!players[id].used || (connected[id] && std::find(left.begin(), left.end(), id) == left.end()))
+			continue;
+		players[id] = {};
+		portalReady[id] = false;
+		for (auto& enemy : enemies)
+			if (enemy->targetPlayerId == id) {
+				enemy->targetPlayerId = -1;
+				enemy->dir = {};
+			}
+		if (boss && boss->targetPlayerId == id)
+			boss->targetPlayerId = -1;
+	}
 }
 
 void World::PushEvent(const void* packet, int size)
@@ -599,7 +882,8 @@ void World::PushEvent(const void* packet, int size)
 		return;
 	PacketHeader header{};
 	std::memcpy(&header, packet, sizeof(header));
-	if (header.size != size || header.type < S2C_BULLET_SPAWN || header.type > S2C_PLAYER_LEFT)
+	if (header.size != size || (header.type != S2C_STAGE_LOAD &&
+		(header.type < S2C_BULLET_SPAWN || header.type > S2C_PLAYER_LEFT)))
 		return;
 	std::vector<char> bytes(static_cast<std::size_t>(size));
 	std::memcpy(bytes.data(), packet, bytes.size());

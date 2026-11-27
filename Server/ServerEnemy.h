@@ -34,6 +34,9 @@ public:
 	float actionTime = 0;
 	float waveEffectTime = 0;
 	float waveRadius = 0;
+	float hurtTime = 0;
+	float deathTime = 0;
+	bool deathNotified = false;
 	std::unique_ptr<BT::Node> tree;
 };
 

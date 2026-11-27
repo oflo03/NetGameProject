@@ -14,8 +14,11 @@ void LogicThreadMain()
 	while (serverRunning) {
 		if (!world)
 			world = StartGame();
-		else
+		else {
 			world->Tick(GameData::LogicIntervalMs / 1000.0f);
+			if (world->IsFinished())
+				world.reset();
+		}
 		nextTick += tickInterval;
 		const auto now = std::chrono::steady_clock::now();
 		// 짧은 지연은 따라잡고, 오래 멈췄을 때만 누적 지연을 버린다.
@@ -78,6 +81,28 @@ std::unique_ptr<World> StartGame()
 
 void EndGame(GameResult result)
 {
-	// [S12] EndGame: S2C_GAME_END 전송, room.lock으로 대기실 상태·레디 정리, 대기실 정보 전파
-	// Broadcast와 BroadcastRoomInfo는 room.lock을 푼 뒤 호출한다
+	// [S12] EndGame: 결과를 먼저 큐에 넣고 대기실 상태를 공개한다.
+	S2C_GAME_END_PACKET packet{};
+	packet.size = sizeof(packet);
+	packet.type = S2C_GAME_END;
+	packet.result = result;
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		if (room.state != ROOM_IN_GAME)
+			return;
+		for (auto& session : room.sessions) {
+			if (!session.used || session.playerId < 0 || session.playerId >= MAX_PLAYERS)
+				continue;
+			// EnqueueSend는 sendLock만 잡으므로 잠금 순서를 지킨다.
+			if (session.connected)
+				EnqueueSend(&session, &packet, sizeof(packet));
+			session.ready = READY_NO;
+			std::lock_guard<std::mutex> inputLock(session.inputLock);
+			session.input = {};
+		}
+		room.startRequested = false;
+		room.leftPlayers.clear();
+		room.state = ROOM_LOBBY;
+	}
+	BroadcastRoomInfo();
 }
