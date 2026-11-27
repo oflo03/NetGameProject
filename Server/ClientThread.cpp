@@ -3,14 +3,13 @@
 #include <cstring>
 #include <cmath>
 #include <cwchar>
+#include <iterator>
 
 // ---- S3 로그인 처리 ----
 
 void HandleLogin(Session* s, const C2S_LOGIN_PACKET* packet)
 {
-	if (packet->size != sizeof(C2S_LOGIN_PACKET))
-		return;	// 크기가 다르면 연결 종료는 11/27 작업, 여기서는 읽지 않고 무시
-	wchar_t name[NAME_LEN];
+	wchar_t name[NAME_LEN];	// 크기는 ProcessPackets가 확인함
 	std::memcpy(name, packet->name, sizeof(name));
 	name[NAME_LEN - 1] = L'\0';	// 클라가 널 문자를 안 넣어 보내도 끝을 막음
 	if (name[0] == L'\0')
@@ -22,8 +21,9 @@ void HandleLogin(Session* s, const C2S_LOGIN_PACKET* packet)
 		std::lock_guard<std::mutex> lock(room.lock);
 		if (s->playerId >= 0)
 			return;	// 이미 로그인한 세션
-		// [S3] 게임 진행 중 거절(LOGIN_IN_GAME)은 11/27 작업
-		if (CountLoggedIn() >= MAX_PLAYERS)
+		if (room.state == ROOM_IN_GAME)
+			result = LOGIN_IN_GAME;	// 게임 중에는 재접속도 받지 않음
+		else if (CountLoggedIn() >= MAX_PLAYERS)
 			result = LOGIN_FULL;
 		else if (IsNameTaken(name))
 			result = LOGIN_NAME_TAKEN;
@@ -183,11 +183,17 @@ void RecvAll(Session* s)
 void ProcessPackets(Session* s)
 {
 	// [S5] ProcessPackets: recvBuffer를 size 단위로 잘라 DispatchPacket 호출, 남은 조각은 앞으로 당김
-	// size가 헤더보다 작거나 MAX_PACKET_SIZE보다 크면 connected = false
+	// 헤더의 size가 그 종류의 구조체 크기와 다르면 본문을 기다리지 않고 connected = false (모르는 종류도)
+	constexpr int packetSizes[] = {	// C2S_LOGIN부터 차례로
+		sizeof(C2S_LOGIN_PACKET), sizeof(C2S_SELECT_CHAR_PACKET), sizeof(C2S_READY_PACKET),
+		sizeof(C2S_START_PACKET), sizeof(C2S_INPUT_PACKET), sizeof(C2S_INTERACT_PACKET),
+	};
+	static_assert(std::size(packetSizes) == size_t(C2S_INTERACT - C2S_LOGIN + 1));
 	int offset = 0;
 	while (s->connected && s->recvLength - offset >= (int)sizeof(PacketHeader)) {
 		const PacketHeader* packet = (const PacketHeader*)(s->recvBuffer + offset);
-		if (packet->size < sizeof(PacketHeader) || packet->size > MAX_PACKET_SIZE) {
+		const int index = packet->type - C2S_LOGIN;
+		if (index < 0 || index >= (int)std::size(packetSizes) || packet->size != packetSizes[index]) {
 			s->connected = false;
 			return;
 		}
@@ -202,7 +208,7 @@ void ProcessPackets(Session* s)
 
 void DispatchPacket(Session* s, const PacketHeader* packet)
 {
-	// [S5] DispatchPacket: packet->size가 종류별 구조체 크기와 같은지 확인, 다르면 connected = false
+	// [S5] DispatchPacket: 종류별 처리 함수 호출 (크기는 ProcessPackets가 확인함)
 	switch (packet->type)
 	{
 	case C2S_LOGIN:
