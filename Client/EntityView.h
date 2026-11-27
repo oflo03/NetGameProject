@@ -84,5 +84,6 @@ private:
 	S2C_DROP_PACKET drop{};
 
 public:
+	explicit DropView(const S2C_DROP_PACKET& packet) : drop(packet) {}
 	void draw(HDC dc);
 };

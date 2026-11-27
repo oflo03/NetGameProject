@@ -25,7 +25,8 @@ namespace {
 PlayState::PlayState(int localPlayerId, const S2C_ROOM_INFO_PACKET& roomInfo)
 	: localPlayerId(localPlayerId), roomInfo(roomInfo)
 {
-	MapManager::getInstance()->LoadTileMap(1, false);
+	if (MapManager::getInstance()->LoadTileMap(1, false))
+		stage = 1;
 	camPos = { worldWidth / 2.0f, worldHeight / 2.0f };
 }
 
@@ -33,6 +34,8 @@ void PlayState::update()
 {
 	for (auto& bullet : bulletViews)
 		bullet.second.update();
+	if (portalVisible)
+		Portal::getInstance()->update();
 	for (auto& effect : effects)
 		effect.update();
 	std::erase_if(effects, [](const Effect& effect) { return effect.time >= Effect::effect[effect.type].frame; });
@@ -110,6 +113,20 @@ void PlayState::draw()
 	const auto previousBitmap = SelectObject(worldDC, worldBitmap);
 	PatBlt(worldDC, 0, 0, worldWidth, worldHeight, BLACKNESS);
 	MapManager::getInstance()->PrintMap(worldDC);
+	for (auto& [id, view] : dropViews)
+		view.draw(worldDC);
+	if (portalVisible) {
+		auto* portal = Portal::getInstance();
+		const int id = localPlayerId >= 0 ? localPlayerId : NetworkManager::getInstance()->playerId;
+		const Vector2D<float>* hintPosition = nullptr;
+		if (id >= 0 && id < MAX_PLAYERS) {
+			const auto& view = playerViews[id];
+			if (view.snapshot.used && view.snapshot.hp > 0 &&
+				(view.renderPosition - portal->GetPos()).GetLenth() < Portal::UseRange)
+				hintPosition = &view.renderPosition;
+		}
+		portal->Draw(worldDC, hintPosition);
+	}
 
 	struct DrawEntry {
 		float y;
@@ -221,18 +238,7 @@ void PlayState::process_packet(const PacketHeader* packet)
 	case S2C_EFFECT: dispatch(&PlayState::OnEffect); break;
 	case S2C_BOSS: dispatch(&PlayState::OnBoss); break;
 	case S2C_PORTAL: dispatch(&PlayState::OnPortal); break;
-	case S2C_STAGE_LOAD:
-		if (packet->size == sizeof(S2C_STAGE_LOAD_PACKET)) {
-			playerViews = {};
-			enemyViews.clear();
-			bossView = {};
-			bulletViews.clear();
-			effects.clear();
-			playerEvents.clear();
-			hasSnapshot = false;
-			dispatch(&PlayState::OnStageLoad);
-		}
-		break;
+	case S2C_STAGE_LOAD: dispatch(&PlayState::OnStageLoad); break;
 	default:
 		break;
 	}
@@ -433,7 +439,10 @@ void PlayState::AddEffect(CEffect type, Vector2D<float> position)
 
 void PlayState::OnDrop(const S2C_DROP_PACKET& packet)
 {
-	// [C6] OnDrop: 드랍 아이템 생성·제거
+	if (packet.add == 0)
+		dropViews.erase(packet.id);
+	else if (packet.add == 1 && packet.type <= DROCKET && IsEffectPosition(packet.x, packet.y))
+		dropViews.insert_or_assign(packet.id, DropView(packet));
 }
 
 void PlayState::OnEffect(const S2C_EFFECT_PACKET& packet)
@@ -461,12 +470,29 @@ void PlayState::OnBoss(const S2C_BOSS_PACKET& packet)
 
 void PlayState::OnPortal(const S2C_PORTAL_PACKET& packet)
 {
-	// [C6] OnPortal: 포탈 표시
+	if (!IsEffectPosition(packet.x, packet.y))
+		return;
+	Portal::getInstance()->SetPos({ packet.x, packet.y });
+	portalVisible = true;
 }
 
 void PlayState::OnStageLoad(const S2C_STAGE_LOAD_PACKET& packet)
 {
-	// [C6] OnStageLoad: 맵 교체와 보스 컷신
+	if (stage == packet.stage || !MapManager::getInstance()->LoadTileMap(packet.stage, false))
+		return;
+
+	stage = packet.stage;
+	playerViews = {};
+	enemyViews.clear();
+	bossView = {};
+	bulletViews.clear();
+	dropViews.clear();
+	effects.clear();
+	playerEvents.clear();
+	portalVisible = false;
+	hasSnapshot = false;
+	const auto spawn = GameData::PlayerSpawns[stage - 1];
+	camPos = { spawn.x, spawn.y };
 }
 
 void PlayState::SampleInput()

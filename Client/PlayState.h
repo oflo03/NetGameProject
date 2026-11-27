@@ -24,9 +24,12 @@ private:
 	std::unordered_map<UINT16, EnemyView> enemyViews;
 	BossView bossView;
 	std::unordered_map<UINT16, BulletView> bulletViews;
+	std::unordered_map<UINT16, DropView> dropViews;
 	std::vector<Effect> effects;
 	std::vector<S2C_PLAYER_EVENT_PACKET> playerEvents;
 	bool hasSnapshot = false;
+	bool portalVisible = false;
+	UINT8 stage = 0;
 	UINT32 snapshotTick = 0;
 	ULONGLONG snapshotReceivedAt = 0;
 

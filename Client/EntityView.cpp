@@ -110,6 +110,19 @@ namespace {
 			LoadAnimation(banshee[STATE_DEAD][FRONT], L"resources/Bombshe_dead.png", 2, 3);
 		}
 	};
+
+	struct DropSprites
+	{
+		CImage items[DROCKET + 1];
+
+		DropSprites()
+		{
+			items[DPISTOL].Load(L"resources/drop_pistol.png");
+			items[DRIFLE].Load(L"resources/drop_rifle.png");
+			items[DSHOTGUN].Load(L"resources/drop_shotgun.png");
+			items[DROCKET].Load(L"resources/drop_rocket.png");
+		}
+	};
 }
 
 Vector2D<float> EntityView::Interpolate(float alpha) const
@@ -323,5 +336,11 @@ void BulletView::draw(HDC dc)
 
 void DropView::draw(HDC dc)
 {
-	// [C9] draw: 드랍 아이템 그리기
+	static const DropSprites sprites;
+	const auto& image = sprites.items[drop.type];
+	if (!image.IsNull()) {
+		const int width = image.GetWidth();
+		const int height = image.GetHeight();
+		image.Draw(dc, static_cast<int>(drop.x) - width, static_cast<int>(drop.y) - height, width * 2, height * 2);
+	}
 }
