@@ -33,6 +33,7 @@ private:
 	int stage = 0;
 	int phase = 0;
 	std::uint32_t tick = 0;
+	bool finished = false;
 	std::uint16_t nextBulletId = 0;
 	std::uint16_t nextEnemyId = 0;
 	std::uint16_t nextDropId = 0;
@@ -50,6 +51,7 @@ public:
 	~World();
 	bool Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap);
 	void Tick(float deltaTime);	// 경과 시간은 초 단위
+	bool IsFinished() const { return finished; }
 	void UpdatePlayers(float deltaTime);
 	Bullet* SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir);
 	void UpdateBullets(float deltaTime);

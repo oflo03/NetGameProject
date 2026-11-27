@@ -5,6 +5,7 @@
 #include "ServerEnemy.h"
 #include "ServerBoss.h"
 #include "ClientThread.h"
+#include "LogicThread.h"
 #include "GameData.h"
 #include "CollisionCheck.h"
 #include <algorithm>
@@ -100,6 +101,7 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 	events.clear();
 	stage = phase = 1;
 	tick = 0;
+	finished = false;
 	nextBulletId = 0;
 	nextEnemyId = 0;
 	nextDropId = 0;
@@ -114,7 +116,10 @@ bool World::Initialize(const S2C_GAME_START_PACKET& start, TileMap initialMap)
 void World::Tick(float deltaTime)
 {
 	// [S9] World::Tick: S10 → S11 → S12 → S13 순서로 고정 틱 실행
-	if (stage == 0)
+	if (stage == 0 || finished)
+		return;
+	RemoveLeftPlayers();
+	if (CheckGameEnd())
 		return;
 	++tick;
 	UpdatePlayers(deltaTime);
@@ -131,7 +136,8 @@ void World::Tick(float deltaTime)
 	if (boss && boss->active)
 		boss->Update(deltaTime, *this);
 	UpdateStage();
-	CheckGameEnd();
+	if (CheckGameEnd())
+		return;
 	FlushEvents();
 	SendSnapshot();
 }
@@ -147,7 +153,7 @@ void World::UpdatePlayers(float deltaTime)
 Bullet* World::SpawnBullet(std::uint8_t type, std::uint8_t side, Vector2D<float> pos, Vector2D<float> dir)
 {
 	// [S10] World::SpawnBullet: 활성 총알과 겹치지 않는 ID를 발급한다.
-	if (stage == 0 || type >= std::size(GameData::Bullets) ||
+	if (stage == 0 || finished || type >= std::size(GameData::Bullets) ||
 		(side != GameData::BULLET_SIDE_PLAYER && side != GameData::BULLET_SIDE_ENEMY) ||
 		!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(dir.x) || !std::isfinite(dir.y))
 		return nullptr;
@@ -729,7 +735,7 @@ void World::UpdateStage()
 bool World::LoadStage(int nextStage)
 {
 	// [S12] World::LoadStage: 맵·배치를 먼저 준비해 실패 시 현재 월드를 유지한다.
-	if (nextStage < 1 || nextStage > 4)
+	if (finished || nextStage < 1 || nextStage > 4)
 		return false;
 	TileMap loadedMap;
 	if (!loadedMap.Load(nextStage))
@@ -823,13 +829,50 @@ bool World::LoadStage(int nextStage)
 
 bool World::CheckGameEnd()
 {
-	// [S12] World::CheckGameEnd: 클리어·전멸·전원 이탈 판정, EndGame 호출
-	return false;
+	// [S12] World::CheckGameEnd: 전멸·전원 이탈을 먼저 확인하고 보스 클리어를 판정한다.
+	if (finished)
+		return true;
+	if (stage == 0)
+		return false;
+	const bool hasSurvivor = std::any_of(players.begin(), players.end(), [](const auto& player) {
+		return player.used && player.hp > 0;
+	});
+	const bool cleared = stage == 4 && boss && boss->hp <= 0;
+	if (hasSurvivor && !cleared)
+		return false;
+	finished = true;
+	// 마지막 피격·사망 이벤트와 상태는 결과 패킷보다 먼저 전달한다.
+	FlushEvents();
+	SendSnapshot();
+	EndGame(hasSurvivor ? RESULT_CLEAR : RESULT_WIPE);
+	return true;
 }
 
 void World::RemoveLeftPlayers()
 {
-	// [S12] World::RemoveLeftPlayers: room.lock을 잡고 이탈 목록을 꺼낸 뒤 월드의 해당 플레이어 제거
+	// [S12] World::RemoveLeftPlayers: 세션 정보는 잠금 안에서 복사하고 월드는 밖에서 정리한다.
+	std::vector<UINT8> left;
+	std::array<bool, MAX_PLAYERS> connected{};
+	{
+		std::lock_guard<std::mutex> lock(room.lock);
+		left.swap(room.leftPlayers);
+		for (const auto& session : room.sessions)
+			if (session.used && session.connected && session.playerId >= 0 && session.playerId < MAX_PLAYERS)
+				connected[session.playerId] = true;
+	}
+	for (int id = 0; id < MAX_PLAYERS; ++id) {
+		if (!players[id].used || (connected[id] && std::find(left.begin(), left.end(), id) == left.end()))
+			continue;
+		players[id] = {};
+		portalReady[id] = false;
+		for (auto& enemy : enemies)
+			if (enemy->targetPlayerId == id) {
+				enemy->targetPlayerId = -1;
+				enemy->dir = {};
+			}
+		if (boss && boss->targetPlayerId == id)
+			boss->targetPlayerId = -1;
+	}
 }
 
 void World::PushEvent(const void* packet, int size)
