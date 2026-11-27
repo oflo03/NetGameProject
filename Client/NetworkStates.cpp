@@ -284,8 +284,8 @@ void LobbyState::process_packet(const PacketHeader* packet)
 		hasRoomInfo = true;
 	}
 	else if (packet->type == S2C_GAME_START && packet->size == sizeof(S2C_GAME_START_PACKET)) {
-		change_state(new PlayState);	// 이 화면은 지워지니 멤버를 건드리지 않는다
-		stateStack.back()->process_packet(packet);	// 플레이어 배치는 PlayState가 쓰도록 그대로 넘김
+		// 내 ID와 대기실 정보(캐릭터, 닉네임)를 PlayState가 복사한 뒤 이 화면이 지워진다
+		change_state(new PlayState(NetworkManager::getInstance()->playerId, roomInfo));
 	}
 }
 
